@@ -759,6 +759,10 @@ makeToggle("Auto Accept Phone", 12, State.autoPhone, function(v)
     State.autoPhone = v
     if v then task.spawn(autoPhoneLoop) end
 end)
+makeToggle("Auto Buy Powers", 13, State.autoPowers, function(v)
+    State.autoPowers = v
+    if v then task.spawn(autoPowersLoop) end
+end)
 
 local sliderRow = Instance.new("Frame")
 sliderRow.Size = UDim2.new(1, 0, 0, 54)
@@ -837,8 +841,8 @@ UserInputService.InputChanged:Connect(function(i)
     end
 end)
 
-section("Prestige", 13)
-makeToggle("Auto Rebirth", 14, State.autoRebirth, function(v)
+section("Prestige", 14)
+makeToggle("Auto Rebirth", 15, State.autoRebirth, function(v)
     State.autoRebirth = v
     if v then task.spawn(autoRebirthLoop) end
 end)
@@ -847,7 +851,7 @@ local mRow = Instance.new("Frame")
 mRow.Size = UDim2.new(1, 0, 0, 54)
 mRow.BackgroundColor3 = PANEL
 mRow.BorderSizePixel = 0
-mRow.LayoutOrder = 15
+mRow.LayoutOrder = 16
 mRow.Parent = body
 corner(mRow, 10)
 
@@ -920,11 +924,11 @@ UserInputService.InputChanged:Connect(function(i)
     end
 end)
 
-makeToggle("Auto Evolve", 16, State.autoEvolve, function(v)
+makeToggle("Auto Evolve", 17, State.autoEvolve, function(v)
     State.autoEvolve = v
     if v then task.spawn(autoEvolveLoop) end
 end)
-makeToggle("Auto Ascend", 17, State.autoAscend, function(v)
+makeToggle("Auto Ascend", 18, State.autoAscend, function(v)
     State.autoAscend = v
     if v then task.spawn(autoAscendLoop) end
 end)
@@ -937,13 +941,8 @@ ascNote.TextSize = 10
 ascNote.TextColor3 = STOP
 ascNote.TextXAlignment = Enum.TextXAlignment.Left
 ascNote.Text = "  Auto Ascend not tested"
-ascNote.LayoutOrder = 18
+ascNote.LayoutOrder = 19
 ascNote.Parent = body
-
-makeToggle("Auto Buy Powers", 19, State.autoPowers, function(v)
-    State.autoPowers = v
-    if v then task.spawn(autoPowersLoop) end
-end)
 
 section("Stats", 20)
 local status = Instance.new("TextLabel")
