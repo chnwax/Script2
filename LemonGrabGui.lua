@@ -385,11 +385,14 @@ local function autoEvolveLoop()
     print("[LemonGrab] evolve loop START")
     while State.autoEvolve and alive() do
         local mine = myTycoon()
-        local _, _, _, evoAvail = prestigeInfo()
+        local pot, inv, _, evoAvail = prestigeInfo()
+        print(string.format("[LemonGrab] evolve tick mine=%s avail=%s inv=%.2f pot=%.2f",
+            tostring(mine and mine.Name), tostring(evoAvail), tonumber(inv) or -1, tonumber(pot) or -1))
         if mine and evoAvail then
             local rf = mine.Remotes:FindFirstChild("Evolve")
             if rf then
                 local ok, ret = pcall(function() return rf:InvokeServer() end)
+                print("[LemonGrab] evolve FIRE ok=" .. tostring(ok) .. " ret=" .. tostring(ret))
                 if ok and ret then State.evolves += 1 end
                 task.wait(0.6)
             end
