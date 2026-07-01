@@ -32,6 +32,8 @@ local State = {
     rebirthMult = 2.0,
     autoEvolve  = false,
     autoAscend  = false,
+    autoPowers  = false,
+    powersBought = 0,
     bought      = 0,
     upgrades    = 0,
     clicks      = 0,
@@ -433,6 +435,50 @@ local function autoAscendLoop()
     end
     State.ascendActive = false
     print("[LemonGrab] ascend loop STOP  (ascends=" .. State.ascends .. ")")
+end
+
+-- auto-buy powers: buy a power level when investors >= 10x its cost
+-- Prices are raw investor costs (Config.Powers[name].Prices); level cost = Prices[level+1].
+-- level = Powers.Permanent[name] + Powers[name]. Server validates affordability -> safe no-op.
+local POWER_PRICES = {
+    WalkSpeed       = {400, 1e9, 1e27, 1e72},
+    UpgradeStack    = {1000, 1e12, 1e33, 1e63},
+    BuyNext         = {1e93},
+    ClickFruitValue = {250, 1e6, 1e18},
+    Manage          = {100},
+}
+local function autoPowersLoop()
+    if State.powersActive then return end
+    State.powersActive = true
+    print("[LemonGrab] powers loop START")
+    while State.autoPowers and alive() do
+        local mine = myTycoon()
+        local V = mine and mine:FindFirstChild("Values")
+        V = V and V:FindFirstChild("Values")
+        local P = mine and mine:FindFirstChild("Values")
+        P = P and P:FindFirstChild("Powers")
+        local perm = P and P:FindFirstChild("Permanent")
+        if mine and V and P then
+            local invLog = tonumber(V:GetAttribute("Investors")) or -math.huge
+            local rf = mine.Remotes:FindFirstChild("UpgradePowerLevel")
+            for name, prices in pairs(POWER_PRICES) do
+                local lvl = (perm and tonumber(perm:GetAttribute(name)) or 0)
+                    + (tonumber(P:GetAttribute(name)) or 0)
+                if lvl < #prices then
+                    local cost = prices[lvl + 1]
+                    -- need investors >= 10x cost  ->  invLog >= log10(cost) + 1
+                    if cost and invLog >= (math.log10(cost) + 1) and rf then
+                        local ok, ret = pcall(function() return rf:InvokeServer(name) end)
+                        if ok and ret then State.powersBought += 1 end
+                        task.wait(0.3)
+                    end
+                end
+            end
+        end
+        task.wait(1.0)
+    end
+    State.powersActive = false
+    print("[LemonGrab] powers loop STOP  (powers=" .. State.powersBought .. ")")
 end
 
 local ACCENT   = Color3.fromRGB(255, 208, 38)
@@ -894,6 +940,11 @@ ascNote.Text = "  Auto Ascend not tested"
 ascNote.LayoutOrder = 18
 ascNote.Parent = body
 
+makeToggle("Auto Buy Powers", 19, State.autoPowers, function(v)
+    State.autoPowers = v
+    if v then task.spawn(autoPowersLoop) end
+end)
+
 section("Stats", 20)
 local status = Instance.new("TextLabel")
 status.Size = UDim2.new(1, 0, 0, 62)
@@ -967,6 +1018,7 @@ closeBtn.MouseButton1Click:Connect(function()
     State.autoRebirth = false
     State.autoEvolve = false
     State.autoAscend = false
+    State.autoPowers = false
     task.wait(0.1)
     gui:Destroy()
 end)
@@ -986,8 +1038,8 @@ task.spawn(function()
         local xnow = ""
         local okp, pot, _, ratioX = pcall(prestigeInfo)
         if okp and ratioX then xnow = string.format("   rebirth now %.2fx", ratioX) end
-        status.Text = string.format("%s%s\ngrabs %d   buys %d   ups %d\ntaps %d   bags %d   offers %d\nrebirths %d   evolves %d   ascends %d",
-            head, xnow, State.grabs, State.bought, State.upgrades, State.clicks, State.collected, State.offers, State.rebirths, State.evolves, State.ascends)
+        status.Text = string.format("%s%s\ngrabs %d   buys %d   ups %d\ntaps %d   bags %d   offers %d\nrebirths %d   evolves %d   ascends %d   powers %d",
+            head, xnow, State.grabs, State.bought, State.upgrades, State.clicks, State.collected, State.offers, State.rebirths, State.evolves, State.ascends, State.powersBought)
         task.wait(0.3)
     end
 end)
