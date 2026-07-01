@@ -770,13 +770,22 @@ setDwellFromAlpha((0.18 - MIND) / (MAXD - MIND))
 
 local dragging = false
 track.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true end
+    if i.UserInputType == Enum.UserInputType.MouseButton1
+    or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        local a = (i.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
+        setDwellFromAlpha(a)
+    end
 end)
 UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    if i.UserInputType == Enum.UserInputType.MouseButton1
+    or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
 end)
 UserInputService.InputChanged:Connect(function(i)
-    if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+    if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
+    or i.UserInputType == Enum.UserInputType.Touch) then
         local a = (i.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
         setDwellFromAlpha(a)
     end
@@ -844,13 +853,22 @@ setMultFromAlpha((2.0 - MINM) / (MAXM - MINM))
 
 local mDragging = false
 mTrack.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 then mDragging = true end
+    if i.UserInputType == Enum.UserInputType.MouseButton1
+    or i.UserInputType == Enum.UserInputType.Touch then
+        mDragging = true
+        local a = (i.Position.X - mTrack.AbsolutePosition.X) / mTrack.AbsoluteSize.X
+        setMultFromAlpha(a)
+    end
 end)
 UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 then mDragging = false end
+    if i.UserInputType == Enum.UserInputType.MouseButton1
+    or i.UserInputType == Enum.UserInputType.Touch then
+        mDragging = false
+    end
 end)
 UserInputService.InputChanged:Connect(function(i)
-    if mDragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+    if mDragging and (i.UserInputType == Enum.UserInputType.MouseMovement
+    or i.UserInputType == Enum.UserInputType.Touch) then
         local a = (i.Position.X - mTrack.AbsolutePosition.X) / mTrack.AbsoluteSize.X
         setMultFromAlpha(a)
     end
