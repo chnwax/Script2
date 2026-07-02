@@ -1110,7 +1110,7 @@ local function scanBestPlates()
         if inst:IsDescendantOf(mine) then
             local key = inst.Name:gsub("%s", "")
             local mult = MULTS[key]
-            if mult and mult > 1 and mult < 1000 then
+            if mult and mult > 1 and mult < 1000 and not inst.Name:find("Statue") then
                 local ok, piv = pcall(function() return inst:GetPivot().Position end)
                 if ok and piv then
                     rows[#rows + 1] = {
