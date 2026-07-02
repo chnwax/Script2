@@ -986,15 +986,41 @@ mKnob.BorderSizePixel = 0
 mKnob.Parent = mTrack
 corner(mKnob, 8)
 
-local MINM, MAXM = 1.0, 10.0
+-- exponential mapping:
+--   left half  (a 0..0.5) -> 1 .. 100
+--   right half (a 0.5..1) -> 100 .. 100000
+-- smooth: farther right = bigger multiplier
+local function multFromAlpha(a)
+    if a <= 0.5 then
+        return 100 ^ (2 * a)               -- 1 .. 100
+    else
+        return 100 * 1000 ^ (2 * (a - 0.5)) -- 100 .. 100000
+    end
+end
+local function alphaFromMult(m)
+    if m <= 100 then
+        return math.log(m) / math.log(100) / 2
+    else
+        return 0.5 + math.log(m / 100) / math.log(1000) / 2
+    end
+end
 local function setMultFromAlpha(a)
     a = math.clamp(a, 0, 1)
-    State.rebirthMult = MINM + (MAXM - MINM) * a
+    local m = multFromAlpha(a)
+    State.rebirthMult = m
     mFill.Size = UDim2.new(a, 0, 1, 0)
     mKnob.Position = UDim2.new(a, 0, 0.5, 0)
-    mLbl.Text = string.format("Rebirth at: %.1fx investors", State.rebirthMult)
+    local txt
+    if m >= 1000 then
+        txt = string.format("%.0f", m)
+    elseif m >= 100 then
+        txt = string.format("%.0f", m)
+    else
+        txt = string.format("%.1f", m)
+    end
+    mLbl.Text = "Rebirth at: " .. txt .. "x investors"
 end
-setMultFromAlpha((2.0 - MINM) / (MAXM - MINM))
+setMultFromAlpha(alphaFromMult(2.0))
 
 local mDragging = false
 mTrack.InputBegan:Connect(function(i)
