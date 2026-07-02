@@ -435,12 +435,13 @@ pcall(function() ASCEND_TOTAL = #require(ReplicatedStorage.Balance).PurchaseOrde
 local function ascendAvailable()
     if not ASCEND_TOTAL then return false end
     local mine = myTycoon()
-    local V = mine and mine:FindFirstChild("Values")
-    V = V and V:FindFirstChild("Values")
-    if not V then return false end
+    local vals = mine and mine:FindFirstChild("Values")
+    -- purchases are stored as true attributes on the "Purchases" Configuration
+    local purch = vals and vals:FindFirstChild("Purchases")
+    if not purch then return false end
     local bought = 0
-    for k, v in pairs(V:GetAttributes()) do
-        if k:sub(1, 10) == "Purchases." and v == true then bought += 1 end
+    for _, v in pairs(purch:GetAttributes()) do
+        if v == true then bought += 1 end
     end
     return bought >= ASCEND_TOTAL
 end
@@ -1147,7 +1148,8 @@ local function scanBestPlates()
     if not MULTS then return speed, cash end
     local mine = myTycoon()
     if not mine then return speed, cash end
-    local V = mine:FindFirstChild("Values"); V = V and V:FindFirstChild("Values")
+    local vals = mine:FindFirstChild("Values")
+    local purch = vals and vals:FindFirstChild("Purchases")
     for _, inst in ipairs(CS:GetTagged("Tycoon.Multiplier")) do
         if inst:IsDescendantOf(mine) then
             local key = inst.Name:gsub("%s", "")
@@ -1158,7 +1160,7 @@ local function scanBestPlates()
                 if ok and piv then
                     local rec = {
                         name = inst.Name, mult = mult, pos = piv,
-                        bought = V and (V:GetAttribute("Purchases." .. key) == true) or false,
+                        bought = purch and (purch:GetAttribute(key) == true) or false,
                     }
                     if typ == "Rate" then speed[#speed + 1] = rec
                     else cash[#cash + 1] = rec end
