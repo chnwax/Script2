@@ -1096,6 +1096,172 @@ closeBtn.MouseButton1Click:Connect(function()
     gui:Destroy()
 end)
 
+-- ---------- best plates finder (top multiplier plates + teleport) ----------
+local MULTS = nil
+pcall(function() MULTS = require(ReplicatedStorage.Balance).Multipliers end)
+local CS = game:GetService("CollectionService")
+local function scanBestPlates()
+    local rows = {}
+    if not MULTS then return rows end
+    local mine = myTycoon()
+    if not mine then return rows end
+    local V = mine:FindFirstChild("Values"); V = V and V:FindFirstChild("Values")
+    for _, inst in ipairs(CS:GetTagged("Tycoon.Purchase")) do
+        if inst:IsDescendantOf(mine) then
+            local key = inst.Name:gsub("%s", "")
+            local mult = MULTS[key]
+            if mult and mult > 1 then
+                local ok, piv = pcall(function() return inst:GetPivot().Position end)
+                if ok and piv then
+                    rows[#rows + 1] = {
+                        name = inst.Name, mult = mult, pos = piv,
+                        bought = V and (V:GetAttribute("Purchases." .. key) == true) or false,
+                    }
+                end
+            end
+        end
+    end
+    table.sort(rows, function(a, b)
+        if a.mult == b.mult then return a.name < b.name end
+        return a.mult > b.mult
+    end)
+    return rows
+end
+
+-- popup panel (hidden until button pressed)
+local popup = Instance.new("Frame")
+popup.Name = "BestPlates"
+popup.AnchorPoint = Vector2.new(0.5, 0.5)
+popup.Position = UDim2.new(0.5, 0, 0.5, 0)
+popup.Size = UDim2.new(0, 320, 0, 380)
+popup.BackgroundColor3 = BG2
+popup.BorderSizePixel = 0
+popup.Visible = false
+popup.ZIndex = 20
+popup.Parent = gui
+corner(popup, 12)
+stroke(popup, PANEL2, 1)
+
+local pTitle = Instance.new("TextLabel")
+pTitle.BackgroundTransparency = 1
+pTitle.Position = UDim2.new(0, 14, 0, 10)
+pTitle.Size = UDim2.new(1, -60, 0, 20)
+pTitle.Font = Enum.Font.GothamBold
+pTitle.TextSize = 14
+pTitle.TextColor3 = TEXT
+pTitle.TextXAlignment = Enum.TextXAlignment.Left
+pTitle.Text = "Top 10 Plates (multiplier)"
+pTitle.ZIndex = 21
+pTitle.Parent = popup
+
+local pClose = Instance.new("TextButton")
+pClose.AnchorPoint = Vector2.new(1, 0.5)
+pClose.Position = UDim2.new(1, -10, 0, 20)
+pClose.Size = UDim2.new(0, 26, 0, 26)
+pClose.BackgroundColor3 = PANEL2
+pClose.BorderSizePixel = 0
+pClose.Font = Enum.Font.GothamBold
+pClose.TextSize = 14
+pClose.TextColor3 = TEXT
+pClose.Text = "X"
+pClose.ZIndex = 21
+pClose.Parent = popup
+corner(pClose, 8)
+pClose.MouseButton1Click:Connect(function() popup.Visible = false end)
+
+local pList = Instance.new("ScrollingFrame")
+pList.Position = UDim2.new(0, 10, 0, 44)
+pList.Size = UDim2.new(1, -20, 1, -54)
+pList.BackgroundTransparency = 1
+pList.BorderSizePixel = 0
+pList.ScrollBarThickness = 4
+pList.CanvasSize = UDim2.new(0, 0, 0, 0)
+pList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+pList.ZIndex = 21
+pList.Parent = popup
+local pLayout = Instance.new("UIListLayout")
+pLayout.Padding = UDim.new(0, 6)
+pLayout.SortOrder = Enum.SortOrder.LayoutOrder
+pLayout.Parent = pList
+
+local function refreshPlates()
+    for _, c in ipairs(pList:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    local rows = scanBestPlates()
+    for i = 1, math.min(10, #rows) do
+        local r = rows[i]
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 40)
+        row.BackgroundColor3 = PANEL
+        row.BorderSizePixel = 0
+        row.LayoutOrder = i
+        row.ZIndex = 21
+        row.Parent = pList
+        corner(row, 8)
+
+        local lbl = Instance.new("TextLabel")
+        lbl.BackgroundTransparency = 1
+        lbl.Position = UDim2.new(0, 10, 0, 0)
+        lbl.Size = UDim2.new(1, -78, 1, 0)
+        lbl.Font = Enum.Font.GothamMedium
+        lbl.TextSize = 12
+        lbl.TextColor3 = r.bought and Color3.fromRGB(120, 220, 120) or TEXT
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.TextYAlignment = Enum.TextYAlignment.Center
+        lbl.TextWrapped = true
+        lbl.Text = string.format("%d. %s  x%s%s", i, r.name, tostring(r.mult), r.bought and "  ✓" or "")
+        lbl.ZIndex = 22
+        lbl.Parent = row
+
+        local tp = Instance.new("TextButton")
+        tp.AnchorPoint = Vector2.new(1, 0.5)
+        tp.Position = UDim2.new(1, -8, 0.5, 0)
+        tp.Size = UDim2.new(0, 56, 0, 26)
+        tp.BackgroundColor3 = ACCENT
+        tp.BorderSizePixel = 0
+        tp.Font = Enum.Font.GothamBold
+        tp.TextSize = 12
+        tp.TextColor3 = Color3.fromRGB(24, 20, 6)
+        tp.Text = "TP"
+        tp.ZIndex = 22
+        tp.Parent = row
+        corner(tp, 8)
+        local dest = r.pos
+        tp.MouseButton1Click:Connect(function()
+            local hrp = hrpNow()
+            if hrp then hrp.CFrame = CFrame.new(dest + Vector3.new(0, 4, 0)) end
+        end)
+    end
+    if #rows == 0 then
+        local none = Instance.new("TextLabel")
+        none.Size = UDim2.new(1, 0, 0, 30)
+        none.BackgroundTransparency = 1
+        none.Font = Enum.Font.GothamMedium
+        none.TextSize = 12
+        none.TextColor3 = SUBTLE
+        none.Text = "no plates found"
+        none.ZIndex = 22
+        none.Parent = pList
+    end
+end
+
+local bestBtn = Instance.new("TextButton")
+bestBtn.Size = UDim2.new(1, 0, 0, 34)
+bestBtn.BackgroundColor3 = PANEL2
+bestBtn.BorderSizePixel = 0
+bestBtn.Font = Enum.Font.GothamBold
+bestBtn.TextSize = 13
+bestBtn.TextColor3 = ACCENT
+bestBtn.Text = "Best Plates (Top 10 + TP)"
+bestBtn.LayoutOrder = 22
+bestBtn.Parent = body
+corner(bestBtn, 10)
+bestBtn.MouseButton1Click:Connect(function()
+    refreshPlates()
+    popup.Visible = not popup.Visible
+end)
+
 local function findCashLabel()
     for _, d in ipairs(plr.PlayerGui:GetDescendants()) do
         if d:IsA("TextLabel") and d.Name == "Cash" then return d end
