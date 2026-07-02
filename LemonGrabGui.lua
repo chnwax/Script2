@@ -131,9 +131,13 @@ task.spawn(function()
     local RunService = game:GetService("RunService")
     while alive() do
         RunService.Heartbeat:Wait()
-        if not State.camClicking then
-            local c = workspace.CurrentCamera
-            if c and c.CameraType == Enum.CameraType.Scriptable then
+        local c = workspace.CurrentCamera
+        if c and c.CameraType == Enum.CameraType.Scriptable then
+            -- force restore if: not in a click window, OR the click window overran
+            -- (flag stuck true from a crashed/double farm loop). Never leave uncapped.
+            local overran = State.camClicking and (os.clock() - (State.clickStart or 0)) > ((State.dwell or 0) + 2)
+            if (not State.camClicking) or overran then
+                State.camClicking = false
                 restoreCam()
             end
         end
@@ -141,6 +145,7 @@ task.spawn(function()
 end)
 
 local function farm()
+    if State.farmActive then return end   -- re-entry guard: never run two farm loops
     cam = workspace.CurrentCamera
     State.farmActive = true
     -- wrap the whole loop so any error still restores the camera
@@ -160,6 +165,7 @@ local function farm()
                         cp.CanQuery = true
 
                         cam = workspace.CurrentCamera
+                        State.clickStart = os.clock()     -- watchdog failsafe timer
                         State.camClicking = true          -- tell watchdog we are aiming
                         cam.CameraType = Enum.CameraType.Scriptable
                         cam.CFrame = CFrame.lookAt(cp.Position + Vector3.new(0, 0, 10), cp.Position)
