@@ -1246,7 +1246,7 @@ local function fillList(sf, rows)
     for _, c in ipairs(sf:GetChildren()) do
         if c:IsA("Frame") then c:Destroy() end
     end
-    for i = 1, math.min(10, #rows) do
+    for i = 1, #rows do
         local r = rows[i]
         local row = Instance.new("Frame")
         row.Size = UDim2.new(1, 0, 0, 40)
