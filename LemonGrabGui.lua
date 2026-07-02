@@ -34,6 +34,8 @@ local State = {
     autoAscend  = false,
     autoPowers  = false,
     powersBought = 0,
+    toggleKey   = Enum.KeyCode.F,
+    awaitKey    = false,
     bought      = 0,
     upgrades    = 0,
     clicks      = 0,
@@ -764,6 +766,55 @@ makeToggle("Auto Buy Powers", 13, State.autoPowers, function(v)
     if v then task.spawn(autoPowersLoop) end
 end)
 
+-- keybind row: click to rebind the start/stop key
+local keyRow = Instance.new("Frame")
+keyRow.Size = UDim2.new(1, 0, 0, 40)
+keyRow.BackgroundColor3 = PANEL
+keyRow.BorderSizePixel = 0
+keyRow.LayoutOrder = 5
+keyRow.Parent = body
+corner(keyRow, 10)
+
+local keyLbl = Instance.new("TextLabel")
+keyLbl.BackgroundTransparency = 1
+keyLbl.Position = UDim2.new(0, 14, 0, 0)
+keyLbl.Size = UDim2.new(1, -120, 1, 0)
+keyLbl.Font = Enum.Font.GothamMedium
+keyLbl.TextSize = 12
+keyLbl.TextColor3 = TEXT
+keyLbl.TextXAlignment = Enum.TextXAlignment.Left
+keyLbl.Text = "Start/Stop key"
+keyLbl.Parent = keyRow
+
+local keyBtn = Instance.new("TextButton")
+keyBtn.AnchorPoint = Vector2.new(1, 0.5)
+keyBtn.Position = UDim2.new(1, -12, 0.5, 0)
+keyBtn.Size = UDim2.new(0, 92, 0, 26)
+keyBtn.BackgroundColor3 = PANEL2
+keyBtn.BorderSizePixel = 0
+keyBtn.Font = Enum.Font.GothamBold
+keyBtn.TextSize = 12
+keyBtn.TextColor3 = ACCENT
+keyBtn.AutoButtonColor = true
+keyBtn.Text = State.toggleKey.Name
+keyBtn.Parent = keyRow
+corner(keyBtn, 8)
+
+keyBtn.MouseButton1Click:Connect(function()
+    State.awaitKey = true
+    keyBtn.Text = "press key"
+    keyBtn.TextColor3 = STOP
+end)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not State.awaitKey then return end
+    if input.UserInputType == Enum.UserInputType.Keyboard then
+        State.toggleKey = input.KeyCode
+        State.awaitKey = false
+        keyBtn.Text = input.KeyCode.Name
+        keyBtn.TextColor3 = ACCENT
+    end
+end)
+
 local sliderRow = Instance.new("Frame")
 sliderRow.Size = UDim2.new(1, 0, 0, 54)
 sliderRow.BackgroundColor3 = PANEL
@@ -1008,10 +1059,9 @@ local function toggleRun()
 end
 startBtn.MouseButton1Click:Connect(toggleRun)
 
--- keybind to start/stop the lemon grab farm (default F)
-State.toggleKey = State.toggleKey or Enum.KeyCode.F
+-- keybind to start/stop the lemon grab farm (default F, rebindable in UI)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
+    if gameProcessed or State.awaitKey then return end
     if input.KeyCode == State.toggleKey then toggleRun() end
 end)
 
