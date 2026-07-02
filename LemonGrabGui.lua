@@ -128,6 +128,7 @@ end)
 
 local function farm()
     cam = workspace.CurrentCamera
+    State.farmActive = true
     -- wrap the whole loop so any error still restores the camera
     pcall(function()
         while State.running and alive() do
@@ -166,6 +167,7 @@ local function farm()
     end)
     -- guaranteed restore on any exit (stop, error, respawn, executor teardown)
     restoreCam()
+    State.farmActive = false
 end
 
 local PRICES = {}
@@ -1086,16 +1088,25 @@ local function toggleRun()
         startBtn.BackgroundColor3 = ACCENT
         startGrad.Color = ColorSequence.new(ACCENT, ACCENT2)
         startBtn.TextColor3 = Color3.fromRGB(24, 20, 6)
-        -- teleport back to start spot + restore camera after farm loop releases the character
+        -- teleport back to start spot + restore camera AFTER farm loop fully releases the character
         local cf = State.startCFrame
         task.spawn(function()
-            task.wait(0.2)
+            -- wait until farm loop actually stopped (it keeps moving HRP until then)
+            local t0 = os.clock()
+            while State.farmActive and os.clock() - t0 < 3 do
+                task.wait(0.05)
+            end
+            task.wait(0.1)
             restoreCam()
             if cf then
                 local hrp = hrpNow()
-                if hrp then hrp.CFrame = cf end
+                -- teleport a few times to beat any residual physics/settling
+                for _ = 1, 3 do
+                    hrp = hrpNow()
+                    if hrp then hrp.CFrame = cf end
+                    task.wait(0.08)
+                end
             end
-            task.wait(0.3)
             restoreCam()
         end)
     end
