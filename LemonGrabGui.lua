@@ -989,7 +989,7 @@ minBtn.MouseButton1Click:Connect(function()
     minBtn.Text = minimized and "+" or "–"
 end)
 
-startBtn.MouseButton1Click:Connect(function()
+local function toggleRun()
     State.running = not State.running
     if State.running then
         startBtn.Text = "■  STOP"
@@ -1005,6 +1005,14 @@ startBtn.MouseButton1Click:Connect(function()
         startGrad.Color = ColorSequence.new(ACCENT, ACCENT2)
         startBtn.TextColor3 = Color3.fromRGB(24, 20, 6)
     end
+end
+startBtn.MouseButton1Click:Connect(toggleRun)
+
+-- keybind to start/stop the lemon grab farm (default F)
+State.toggleKey = State.toggleKey or Enum.KeyCode.F
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == State.toggleKey then toggleRun() end
 end)
 
 closeBtn.MouseButton1Click:Connect(function()
