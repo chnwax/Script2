@@ -107,41 +107,65 @@ local function clickCenter(sp)
     VIM:SendMouseButtonEvent(sp.X, sp.Y, 0, false, game, 0)
 end
 
+-- restore camera to normal follow mode (never leave it Scriptable/unlocked)
+local function restoreCam()
+    cam = workspace.CurrentCamera
+    if not cam then return end
+    pcall(function()
+        if cam.CameraType == Enum.CameraType.Scriptable then
+            cam.CameraType = Enum.CameraType.Custom
+        end
+        local char = plr.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then cam.CameraSubject = hum end
+    end)
+end
+-- if character respawns while NOT farming, make sure camera is normal
+plr.CharacterAdded:Connect(function()
+    task.wait(0.2)
+    if not State.running then restoreCam() end
+end)
+
 local function farm()
-    local savedCamType = cam.CameraType
-    cam.CameraType = Enum.CameraType.Scriptable
-    while State.running and alive() do
-        local fruits = collectFruit()
-        for _, cp in ipairs(fruits) do
-            if not State.running then break end
-            if cp and cp.Parent then
-                local char, hrp = getCharParts()
-                if hrp then
-                    local origSize = cp.Size
+    cam = workspace.CurrentCamera
+    -- wrap the whole loop so any error still restores the camera
+    pcall(function()
+        while State.running and alive() do
+            local fruits = collectFruit()
+            for _, cp in ipairs(fruits) do
+                if not State.running then break end
+                if cp and cp.Parent then
+                    local char, hrp = getCharParts()
+                    if hrp then
+                        local origSize = cp.Size
 
-                    hrp.CFrame = CFrame.new(cp.Position + Vector3.new(0, 0, 8))
+                        hrp.CFrame = CFrame.new(cp.Position + Vector3.new(0, 0, 8))
 
-                    cp.Size = Vector3.new(State.hitboxSize, State.hitboxSize, State.hitboxSize)
-                    cp.CanQuery = true
+                        cp.Size = Vector3.new(State.hitboxSize, State.hitboxSize, State.hitboxSize)
+                        cp.CanQuery = true
 
-                    cam.CFrame = CFrame.lookAt(cp.Position + Vector3.new(0, 0, 10), cp.Position)
-                    task.wait(0.06)
-                    local sp = cam:WorldToScreenPoint(cp.Position)
-                    if State.autoClick then
-                        clickCenter(sp)
-                        task.wait(State.dwell)
-                    else
+                        cam = workspace.CurrentCamera
+                        cam.CameraType = Enum.CameraType.Scriptable
+                        cam.CFrame = CFrame.lookAt(cp.Position + Vector3.new(0, 0, 10), cp.Position)
+                        task.wait(0.06)
+                        local sp = cam:WorldToScreenPoint(cp.Position)
+                        if State.autoClick then
+                            clickCenter(sp)
+                            task.wait(State.dwell)
+                        else
 
-                        task.wait(State.dwell)
+                            task.wait(State.dwell)
+                        end
+
+                        if cp and cp.Parent then cp.Size = origSize end
                     end
-
-                    if cp and cp.Parent then cp.Size = origSize end
                 end
             end
+            task.wait(0.05)
         end
-        task.wait(0.05)
-    end
-    cam.CameraType = savedCamType
+    end)
+    -- guaranteed restore on any exit (stop, error, respawn, executor teardown)
+    restoreCam()
 end
 
 local PRICES = {}
@@ -1062,15 +1086,18 @@ local function toggleRun()
         startBtn.BackgroundColor3 = ACCENT
         startGrad.Color = ColorSequence.new(ACCENT, ACCENT2)
         startBtn.TextColor3 = Color3.fromRGB(24, 20, 6)
-        -- teleport back to start spot after farm loop releases the character
-        if State.startCFrame then
-            local cf = State.startCFrame
-            task.spawn(function()
-                task.wait(0.2)
+        -- teleport back to start spot + restore camera after farm loop releases the character
+        local cf = State.startCFrame
+        task.spawn(function()
+            task.wait(0.2)
+            restoreCam()
+            if cf then
                 local hrp = hrpNow()
                 if hrp then hrp.CFrame = cf end
-            end)
-        end
+            end
+            task.wait(0.3)
+            restoreCam()
+        end)
     end
 end
 startBtn.MouseButton1Click:Connect(toggleRun)
@@ -1093,6 +1120,7 @@ closeBtn.MouseButton1Click:Connect(function()
     State.autoAscend = false
     State.autoPowers = false
     task.wait(0.1)
+    restoreCam()
     gui:Destroy()
 end)
 
