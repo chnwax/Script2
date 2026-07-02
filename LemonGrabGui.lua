@@ -1136,60 +1136,88 @@ local function scanBestPlates()
     return speed, cash
 end
 
--- popup panel (hidden until button pressed) -- draggable
+-- popup panel (hidden until button pressed) -- draggable, styled like main window
 local popup = Instance.new("Frame")
 popup.Name = "BestPlates"
 popup.AnchorPoint = Vector2.new(0.5, 0.5)
 popup.Position = UDim2.new(0.5, 0, 0.5, 0)
-popup.Size = UDim2.new(0, 340, 0, 440)
+popup.Size = UDim2.new(0, 340, 0, 460)
 popup.BackgroundColor3 = BG2
 popup.BorderSizePixel = 0
 popup.Visible = false
 popup.ZIndex = 20
 popup.Parent = gui
-corner(popup, 12)
-stroke(popup, PANEL2, 1)
+corner(popup, 16)
+gradient(popup, BG2, BG, 90)
+stroke(popup, Color3.fromRGB(72, 72, 86), 1, 0.15)
 
--- drag bar (top strip)
-local pBar = Instance.new("TextLabel")
-pBar.BackgroundTransparency = 1
-pBar.Position = UDim2.new(0, 14, 0, 10)
-pBar.Size = UDim2.new(1, -60, 0, 24)
-pBar.Font = Enum.Font.GothamBold
-pBar.TextSize = 14
-pBar.TextColor3 = TEXT
-pBar.TextXAlignment = Enum.TextXAlignment.Left
-pBar.Text = "Best Plates  (drag me)"
-pBar.ZIndex = 21
-pBar.Parent = popup
+-- title bar (drag handle) -- mirrors main window header
+local pTitle = Instance.new("Frame")
+pTitle.Size = UDim2.new(1, 0, 0, 50)
+pTitle.BackgroundColor3 = BG2
+pTitle.BorderSizePixel = 0
+pTitle.Active = true
+pTitle.ZIndex = 21
+pTitle.Parent = popup
+corner(pTitle, 16)
+gradient(pTitle, Color3.fromRGB(38, 38, 48), BG2, 90)
+
+local pBadge = Instance.new("Frame")
+pBadge.Size = UDim2.fromOffset(28, 28); pBadge.Position = UDim2.new(0, 14, 0.5, -14)
+pBadge.BackgroundColor3 = ACCENT; pBadge.BorderSizePixel = 0; pBadge.ZIndex = 22; pBadge.Parent = pTitle
+corner(pBadge, 9)
+gradient(pBadge, ACCENT, ACCENT2, 90)
+local pBadgeIcon = Instance.new("TextLabel")
+pBadgeIcon.BackgroundTransparency = 1
+pBadgeIcon.Size = UDim2.fromScale(1, 1)
+pBadgeIcon.Font = Enum.Font.GothamBold
+pBadgeIcon.TextSize = 15
+pBadgeIcon.TextColor3 = Color3.fromRGB(30, 26, 8)
+pBadgeIcon.Text = "P"
+pBadgeIcon.ZIndex = 23
+pBadgeIcon.Parent = pBadge
+
+local pTitleText = Instance.new("TextLabel")
+pTitleText.BackgroundTransparency = 1
+pTitleText.Position = UDim2.new(0, 52, 0, 8)
+pTitleText.Size = UDim2.new(1, -110, 0, 18)
+pTitleText.Font = Enum.Font.GothamBold
+pTitleText.TextSize = 15
+pTitleText.TextColor3 = TEXT
+pTitleText.TextXAlignment = Enum.TextXAlignment.Left
+pTitleText.Text = "Best Plates"
+pTitleText.ZIndex = 22
+pTitleText.Parent = pTitle
+
+local pTitleSub = Instance.new("TextLabel")
+pTitleSub.BackgroundTransparency = 1
+pTitleSub.Position = UDim2.new(0, 52, 0, 25)
+pTitleSub.Size = UDim2.new(1, -110, 0, 14)
+pTitleSub.Font = Enum.Font.GothamMedium
+pTitleSub.TextSize = 11
+pTitleSub.TextColor3 = SUBTLE
+pTitleSub.TextXAlignment = Enum.TextXAlignment.Left
+pTitleSub.Text = "Speed + Cash + TP"
+pTitleSub.ZIndex = 22
+pTitleSub.Parent = pTitle
 
 local pClose = Instance.new("TextButton")
-pClose.AnchorPoint = Vector2.new(1, 0.5)
-pClose.Position = UDim2.new(1, -10, 0, 22)
-pClose.Size = UDim2.new(0, 26, 0, 26)
-pClose.BackgroundColor3 = PANEL2
-pClose.BorderSizePixel = 0
-pClose.Font = Enum.Font.GothamBold
-pClose.TextSize = 14
-pClose.TextColor3 = TEXT
-pClose.Text = "X"
-pClose.ZIndex = 21
-pClose.Parent = popup
+pClose.Size = UDim2.fromOffset(28, 28); pClose.Position = UDim2.new(1, -42, 0.5, -14)
+pClose.BackgroundColor3 = PANEL2; pClose.Text = "X"
+pClose.Font = Enum.Font.GothamBold; pClose.TextSize = 14; pClose.TextColor3 = SUBTLE
+pClose.AutoButtonColor = true; pClose.BorderSizePixel = 0; pClose.ZIndex = 22; pClose.Parent = pTitle
 corner(pClose, 8)
 pClose.MouseButton1Click:Connect(function() popup.Visible = false end)
 
--- make popup draggable via pBar
+-- make popup draggable via title bar
 do
     local dragging, dragStart, startPos = false, nil, nil
-    local function beginDrag(input)
-        dragging = true
-        dragStart = input.Position
-        startPos = popup.Position
-    end
-    pBar.InputBegan:Connect(function(input)
+    pTitle.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
-            beginDrag(input)
+            dragging = true
+            dragStart = input.Position
+            startPos = popup.Position
         end
     end)
     UserInputService.InputChanged:Connect(function(input)
@@ -1208,26 +1236,28 @@ do
     end)
 end
 
--- helper: build a labeled list column (header + scrolling frame)
-local function makeCol(headerText, yScale)
+-- helper: build a labeled list column (section header + scrolling frame)
+local function makeCol(headerText, yOff)
     local hdr = Instance.new("TextLabel")
     hdr.BackgroundTransparency = 1
-    hdr.Position = UDim2.new(0, 14, yScale, 0)
-    hdr.Size = UDim2.new(1, -28, 0, 18)
+    hdr.Position = UDim2.new(0, 14, 0, yOff)
+    hdr.Size = UDim2.new(1, -28, 0, 16)
     hdr.Font = Enum.Font.GothamBold
-    hdr.TextSize = 12
-    hdr.TextColor3 = ACCENT
+    hdr.TextSize = 11
+    hdr.TextColor3 = SUBTLE
     hdr.TextXAlignment = Enum.TextXAlignment.Left
-    hdr.Text = headerText
+    hdr.Text = string.upper(headerText)
     hdr.ZIndex = 21
     hdr.Parent = popup
 
     local sf = Instance.new("ScrollingFrame")
-    sf.Position = UDim2.new(0, 10, yScale, 22)
-    sf.Size = UDim2.new(1, -20, 0.5, -70)
+    sf.Position = UDim2.new(0, 10, 0, yOff + 20)
+    sf.Size = UDim2.new(1, -20, 0, 168)
     sf.BackgroundTransparency = 1
     sf.BorderSizePixel = 0
     sf.ScrollBarThickness = 4
+    sf.ScrollBarImageColor3 = PANEL2
+    sf.ScrollBarImageTransparency = 0.2
     sf.CanvasSize = UDim2.new(0, 0, 0, 0)
     sf.AutomaticCanvasSize = Enum.AutomaticSize.Y
     sf.ZIndex = 21
@@ -1239,8 +1269,8 @@ local function makeCol(headerText, yScale)
     return sf
 end
 
-local speedList = makeCol("SPEED plates", 0.10)
-local cashList = makeCol("CASH plates", 0.55)
+local speedList = makeCol("Speed plates", 58)
+local cashList = makeCol("Cash plates", 256)
 
 local function fillList(sf, rows)
     for _, c in ipairs(sf:GetChildren()) do
