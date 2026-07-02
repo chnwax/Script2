@@ -125,6 +125,20 @@ plr.CharacterAdded:Connect(function()
     task.wait(0.2)
     if not State.running then restoreCam() end
 end)
+-- watchdog: whenever farm is NOT inside a click window, force camera back to Custom.
+-- prevents the camera staying "uncapped"/Scriptable if the game is left in the background.
+task.spawn(function()
+    local RunService = game:GetService("RunService")
+    while alive() do
+        RunService.Heartbeat:Wait()
+        if not State.camClicking then
+            local c = workspace.CurrentCamera
+            if c and c.CameraType == Enum.CameraType.Scriptable then
+                restoreCam()
+            end
+        end
+    end
+end)
 
 local function farm()
     cam = workspace.CurrentCamera
@@ -146,6 +160,7 @@ local function farm()
                         cp.CanQuery = true
 
                         cam = workspace.CurrentCamera
+                        State.camClicking = true          -- tell watchdog we are aiming
                         cam.CameraType = Enum.CameraType.Scriptable
                         cam.CFrame = CFrame.lookAt(cp.Position + Vector3.new(0, 0, 10), cp.Position)
                         task.wait(0.06)
@@ -159,6 +174,7 @@ local function farm()
                         end
 
                         if cp and cp.Parent then cp.Size = origSize end
+                        State.camClicking = false         -- click done; watchdog may recap camera
                     end
                 end
             end
@@ -166,6 +182,7 @@ local function farm()
         end
     end)
     -- guaranteed restore on any exit (stop, error, respawn, executor teardown)
+    State.camClicking = false
     restoreCam()
     State.farmActive = false
 end
