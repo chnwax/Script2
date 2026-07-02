@@ -1096,44 +1096,52 @@ closeBtn.MouseButton1Click:Connect(function()
     gui:Destroy()
 end)
 
--- ---------- best plates finder (top multiplier plates + teleport) ----------
+-- ---------- best plates finder (top speed + cash multiplier plates + teleport) ----------
+-- Plates tagged "Tycoon.Multiplier" carry a "Type" attribute:
+--   Type == "Rate"  -> boosts production SPEED
+--   Type == "Value" -> boosts cash VALUE
 local MULTS = nil
 pcall(function() MULTS = require(ReplicatedStorage.Balance).Multipliers end)
 local CS = game:GetService("CollectionService")
 local function scanBestPlates()
-    local rows = {}
-    if not MULTS then return rows end
+    local speed, cash = {}, {}
+    if not MULTS then return speed, cash end
     local mine = myTycoon()
-    if not mine then return rows end
+    if not mine then return speed, cash end
     local V = mine:FindFirstChild("Values"); V = V and V:FindFirstChild("Values")
-    for _, inst in ipairs(CS:GetTagged("Tycoon.Purchase")) do
+    for _, inst in ipairs(CS:GetTagged("Tycoon.Multiplier")) do
         if inst:IsDescendantOf(mine) then
             local key = inst.Name:gsub("%s", "")
             local mult = MULTS[key]
+            local typ = inst:GetAttribute("Type")
             if mult and mult > 1 and mult < 1000 and not inst.Name:find("Statue") then
                 local ok, piv = pcall(function() return inst:GetPivot().Position end)
                 if ok and piv then
-                    rows[#rows + 1] = {
+                    local rec = {
                         name = inst.Name, mult = mult, pos = piv,
                         bought = V and (V:GetAttribute("Purchases." .. key) == true) or false,
                     }
+                    if typ == "Rate" then speed[#speed + 1] = rec
+                    else cash[#cash + 1] = rec end
                 end
             end
         end
     end
-    table.sort(rows, function(a, b)
+    local function bymult(a, b)
         if a.mult == b.mult then return a.name < b.name end
         return a.mult > b.mult
-    end)
-    return rows
+    end
+    table.sort(speed, bymult)
+    table.sort(cash, bymult)
+    return speed, cash
 end
 
--- popup panel (hidden until button pressed)
+-- popup panel (hidden until button pressed) -- draggable
 local popup = Instance.new("Frame")
 popup.Name = "BestPlates"
 popup.AnchorPoint = Vector2.new(0.5, 0.5)
 popup.Position = UDim2.new(0.5, 0, 0.5, 0)
-popup.Size = UDim2.new(0, 320, 0, 380)
+popup.Size = UDim2.new(0, 340, 0, 440)
 popup.BackgroundColor3 = BG2
 popup.BorderSizePixel = 0
 popup.Visible = false
@@ -1142,21 +1150,22 @@ popup.Parent = gui
 corner(popup, 12)
 stroke(popup, PANEL2, 1)
 
-local pTitle = Instance.new("TextLabel")
-pTitle.BackgroundTransparency = 1
-pTitle.Position = UDim2.new(0, 14, 0, 10)
-pTitle.Size = UDim2.new(1, -60, 0, 20)
-pTitle.Font = Enum.Font.GothamBold
-pTitle.TextSize = 14
-pTitle.TextColor3 = TEXT
-pTitle.TextXAlignment = Enum.TextXAlignment.Left
-pTitle.Text = "Top 10 Plates (multiplier)"
-pTitle.ZIndex = 21
-pTitle.Parent = popup
+-- drag bar (top strip)
+local pBar = Instance.new("TextLabel")
+pBar.BackgroundTransparency = 1
+pBar.Position = UDim2.new(0, 14, 0, 10)
+pBar.Size = UDim2.new(1, -60, 0, 24)
+pBar.Font = Enum.Font.GothamBold
+pBar.TextSize = 14
+pBar.TextColor3 = TEXT
+pBar.TextXAlignment = Enum.TextXAlignment.Left
+pBar.Text = "Best Plates  (drag me)"
+pBar.ZIndex = 21
+pBar.Parent = popup
 
 local pClose = Instance.new("TextButton")
 pClose.AnchorPoint = Vector2.new(1, 0.5)
-pClose.Position = UDim2.new(1, -10, 0, 20)
+pClose.Position = UDim2.new(1, -10, 0, 22)
 pClose.Size = UDim2.new(0, 26, 0, 26)
 pClose.BackgroundColor3 = PANEL2
 pClose.BorderSizePixel = 0
@@ -1169,26 +1178,74 @@ pClose.Parent = popup
 corner(pClose, 8)
 pClose.MouseButton1Click:Connect(function() popup.Visible = false end)
 
-local pList = Instance.new("ScrollingFrame")
-pList.Position = UDim2.new(0, 10, 0, 44)
-pList.Size = UDim2.new(1, -20, 1, -54)
-pList.BackgroundTransparency = 1
-pList.BorderSizePixel = 0
-pList.ScrollBarThickness = 4
-pList.CanvasSize = UDim2.new(0, 0, 0, 0)
-pList.AutomaticCanvasSize = Enum.AutomaticSize.Y
-pList.ZIndex = 21
-pList.Parent = popup
-local pLayout = Instance.new("UIListLayout")
-pLayout.Padding = UDim.new(0, 6)
-pLayout.SortOrder = Enum.SortOrder.LayoutOrder
-pLayout.Parent = pList
+-- make popup draggable via pBar
+do
+    local dragging, dragStart, startPos = false, nil, nil
+    local function beginDrag(input)
+        dragging = true
+        dragStart = input.Position
+        startPos = popup.Position
+    end
+    pBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            beginDrag(input)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - dragStart
+            popup.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+end
 
-local function refreshPlates()
-    for _, c in ipairs(pList:GetChildren()) do
+-- helper: build a labeled list column (header + scrolling frame)
+local function makeCol(headerText, yScale)
+    local hdr = Instance.new("TextLabel")
+    hdr.BackgroundTransparency = 1
+    hdr.Position = UDim2.new(0, 14, yScale, 0)
+    hdr.Size = UDim2.new(1, -28, 0, 18)
+    hdr.Font = Enum.Font.GothamBold
+    hdr.TextSize = 12
+    hdr.TextColor3 = ACCENT
+    hdr.TextXAlignment = Enum.TextXAlignment.Left
+    hdr.Text = headerText
+    hdr.ZIndex = 21
+    hdr.Parent = popup
+
+    local sf = Instance.new("ScrollingFrame")
+    sf.Position = UDim2.new(0, 10, yScale, 22)
+    sf.Size = UDim2.new(1, -20, 0.5, -70)
+    sf.BackgroundTransparency = 1
+    sf.BorderSizePixel = 0
+    sf.ScrollBarThickness = 4
+    sf.CanvasSize = UDim2.new(0, 0, 0, 0)
+    sf.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    sf.ZIndex = 21
+    sf.Parent = popup
+    local lay = Instance.new("UIListLayout")
+    lay.Padding = UDim.new(0, 6)
+    lay.SortOrder = Enum.SortOrder.LayoutOrder
+    lay.Parent = sf
+    return sf
+end
+
+local speedList = makeCol("SPEED plates", 0.10)
+local cashList = makeCol("CASH plates", 0.55)
+
+local function fillList(sf, rows)
+    for _, c in ipairs(sf:GetChildren()) do
         if c:IsA("Frame") then c:Destroy() end
     end
-    local rows = scanBestPlates()
     for i = 1, math.min(10, #rows) do
         local r = rows[i]
         local row = Instance.new("Frame")
@@ -1197,7 +1254,7 @@ local function refreshPlates()
         row.BorderSizePixel = 0
         row.LayoutOrder = i
         row.ZIndex = 21
-        row.Parent = pList
+        row.Parent = sf
         corner(row, 8)
 
         local lbl = Instance.new("TextLabel")
@@ -1242,8 +1299,14 @@ local function refreshPlates()
         none.TextColor3 = SUBTLE
         none.Text = "no plates found"
         none.ZIndex = 22
-        none.Parent = pList
+        none.Parent = sf
     end
+end
+
+local function refreshPlates()
+    local speed, cash = scanBestPlates()
+    fillList(speedList, speed)
+    fillList(cashList, cash)
 end
 
 local bestBtn = Instance.new("TextButton")
@@ -1253,7 +1316,7 @@ bestBtn.BorderSizePixel = 0
 bestBtn.Font = Enum.Font.GothamBold
 bestBtn.TextSize = 13
 bestBtn.TextColor3 = ACCENT
-bestBtn.Text = "Best Plates (Top 10 + TP)"
+bestBtn.Text = "Best Plates (Speed + Cash + TP)"
 bestBtn.LayoutOrder = 22
 bestBtn.Parent = body
 corner(bestBtn, 10)
