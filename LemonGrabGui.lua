@@ -1193,6 +1193,7 @@ local function scanBestPlates()
                     local rec = {
                         name = inst.Name, mult = mult, pos = piv,
                         bought = purch and (purch:GetAttribute(key) == true) or false,
+                        global = (inst:GetAttribute("Target") == nil),
                     }
                     if typ == "Rate" then speed[#speed + 1] = rec
                     else cash[#cash + 1] = rec end
@@ -1370,7 +1371,9 @@ local function fillList(sf, rows)
         lbl.TextXAlignment = Enum.TextXAlignment.Left
         lbl.TextYAlignment = Enum.TextYAlignment.Center
         lbl.TextWrapped = true
-        lbl.Text = string.format("%d. %s  x%s%s", i, r.name, tostring(r.mult), r.bought and "  ✓" or "")
+        lbl.RichText = true
+        local gtag = r.global and '  <font color="#FFD026">[GLOBAL]</font>' or ""
+        lbl.Text = string.format("%d. %s  x%s%s%s", i, r.name, tostring(r.mult), r.bought and "  ✓" or "", gtag)
         lbl.ZIndex = 22
         lbl.Parent = row
 
