@@ -1040,9 +1040,16 @@ minBtn.MouseButton1Click:Connect(function()
     minBtn.Text = minimized and "+" or "–"
 end)
 
+local function hrpNow()
+    local char = plr.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
 local function toggleRun()
     State.running = not State.running
     if State.running then
+        -- save spot where farm started
+        local hrp = hrpNow()
+        State.startCFrame = hrp and hrp.CFrame or nil
         startBtn.Text = "■  STOP"
         startBtn.BackgroundColor3 = STOP
         startGrad.Color = ColorSequence.new(STOP, STOP2)
@@ -1055,6 +1062,15 @@ local function toggleRun()
         startBtn.BackgroundColor3 = ACCENT
         startGrad.Color = ColorSequence.new(ACCENT, ACCENT2)
         startBtn.TextColor3 = Color3.fromRGB(24, 20, 6)
+        -- teleport back to start spot after farm loop releases the character
+        if State.startCFrame then
+            local cf = State.startCFrame
+            task.spawn(function()
+                task.wait(0.2)
+                local hrp = hrpNow()
+                if hrp then hrp.CFrame = cf end
+            end)
+        end
     end
 end
 startBtn.MouseButton1Click:Connect(toggleRun)
