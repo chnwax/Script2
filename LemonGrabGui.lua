@@ -1127,6 +1127,7 @@ local function toggleRun()
         startBtn.BackgroundColor3 = ACCENT
         startGrad.Color = ColorSequence.new(ACCENT, ACCENT2)
         startBtn.TextColor3 = Color3.fromRGB(24, 20, 6)
+        State.camClicking = false   -- unblock watchdog immediately so camera recaps now
         -- teleport back to start spot + restore camera AFTER farm loop fully releases the character
         local cf = State.startCFrame
         task.spawn(function()
@@ -1169,6 +1170,7 @@ closeBtn.MouseButton1Click:Connect(function()
     State.autoEvolve = false
     State.autoAscend = false
     State.autoPowers = false
+    State.camClicking = false
     task.wait(0.1)
     restoreCam()
     gui:Destroy()
