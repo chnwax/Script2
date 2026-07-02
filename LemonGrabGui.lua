@@ -449,7 +449,7 @@ end
 local function autoAscendLoop()
     if State.ascendActive then return end
     State.ascendActive = true
-    print("[LemonGrab] ascend loop START (UNTESTED)")
+    print("[LemonGrab] ascend loop START")
     while State.autoAscend and alive() do
         local mine = myTycoon()
         if mine and ascendAvailable() then
@@ -1010,17 +1010,6 @@ makeToggle("Auto Ascend", 18, State.autoAscend, function(v)
     State.autoAscend = v
     if v then task.spawn(autoAscendLoop) end
 end)
-
-local ascNote = Instance.new("TextLabel")
-ascNote.BackgroundTransparency = 1
-ascNote.Size = UDim2.new(1, 0, 0, 12)
-ascNote.Font = Enum.Font.GothamMedium
-ascNote.TextSize = 10
-ascNote.TextColor3 = STOP
-ascNote.TextXAlignment = Enum.TextXAlignment.Left
-ascNote.Text = "  Auto Ascend not tested"
-ascNote.LayoutOrder = 19
-ascNote.Parent = body
 
 section("Stats", 20)
 local status = Instance.new("TextLabel")
