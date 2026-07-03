@@ -34,6 +34,8 @@ local State = {
     autoAscend  = false,
     autoPowers  = false,
     powersBought = 0,
+    antiAfk     = true,
+    autoNice    = true,
     toggleKey   = Enum.KeyCode.F,
     awaitKey    = false,
     bought      = 0,
@@ -142,6 +144,46 @@ task.spawn(function()
             end
         end
     end
+end)
+
+-- anti-AFK: game kicks idle players (~20 min). On Idled, nudge the virtual controller.
+task.spawn(function()
+    local ok, VirtualUser = pcall(function() return game:GetService("VirtualUser") end)
+    if not ok or not VirtualUser then return end
+    plr.Idled:Connect(function()
+        if not State.antiAfk then return end
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end)
+end)
+
+-- auto-dismiss the Staircase "permanent purchase" alert (button text "Nice!").
+-- ONLY fires buttons whose text is exactly "Nice!" -- never rebirth/ascend confirms.
+task.spawn(function()
+    local ok, alert = pcall(function()
+        return plr.PlayerGui:WaitForChild("Important", 30):WaitForChild("Alert", 30)
+    end)
+    if not ok or not alert then return end
+    local btnFrame = alert:FindFirstChild("Main")
+    btnFrame = btnFrame and btnFrame:FindFirstChild("Buttons")
+    if not btnFrame then return end
+    local function tryDismiss(child)
+        if not State.autoNice then return end
+        if not child:IsA("GuiButton") then return end
+        if child.Name == "Template" then return end
+        if child.Text ~= "Nice!" then return end   -- strict: only the harmless info alert
+        task.wait(0.05)
+        pcall(function()
+            if getconnections then
+                for _, c in ipairs(getconnections(child.Activated)) do c:Fire() end
+                for _, c in ipairs(getconnections(child.MouseButton1Click)) do c:Fire() end
+            end
+        end)
+    end
+    btnFrame.ChildAdded:Connect(tryDismiss)
+    for _, c in ipairs(btnFrame:GetChildren()) do tryDismiss(c) end
 end)
 
 local function farm()
@@ -814,6 +856,9 @@ end)
 makeToggle("Auto Buy Powers", 13, State.autoPowers, function(v)
     State.autoPowers = v
     if v then task.spawn(autoPowersLoop) end
+end)
+makeToggle("Anti-AFK", 14, State.antiAfk, function(v)
+    State.antiAfk = v
 end)
 
 -- keybind row: click to rebind the start/stop key
