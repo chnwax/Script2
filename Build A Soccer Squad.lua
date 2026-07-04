@@ -213,44 +213,36 @@ end)
 -- it answers "which cards can I roll from this country?".
 local WorldCupData = require(RS:WaitForChild("WorldCupData"))
 
-local catalog       = {}   -- country -> { {name,pos,ovr,year}, ... }
-local countryNames  = {}   -- alphabetical list of countries
+-- teamsCY[country][year] = { {name,pos,ovr}, ... } sorted by OVR desc.
+-- Each roll lands on ONE exact team (top-level country + year on RollResult),
+-- so we index by country AND year to show that precise squad.
+local teamsCY = {}
 do
     for year, teams in pairs(WorldCupData.Teams) do
         for country, team in pairs(teams) do
-            local list = catalog[country]
-            if not list then
-                list = {}; catalog[country] = list
-                countryNames[#countryNames + 1] = country
-            end
+            teamsCY[country] = teamsCY[country] or {}
+            local list = {}
             if type(team.players) == "table" then
                 for _, p in ipairs(team.players) do
-                    list[#list + 1] = { name = p.name, pos = p.pos, ovr = p.ovr, year = year }
+                    list[#list + 1] = { name = p.name, pos = p.pos, ovr = p.ovr }
                 end
             end
+            table.sort(list, function(a, b)
+                if a.ovr == b.ovr then return a.name < b.name end
+                return a.ovr > b.ovr
+            end)
+            teamsCY[country][year] = list
         end
     end
-    for _, list in pairs(catalog) do
-        table.sort(list, function(a, b)
-            if a.ovr == b.ovr then return a.name < b.name end
-            return a.ovr > b.ovr
-        end)
-    end
-    table.sort(countryNames)
 end
 
--- countries appearing in the most recent roll (for auto-highlight in the catalog)
-local lastRollCountries = {}
+-- the exact team the most recent roll landed on (RollResult carries top-level
+-- .country and .year — the same values showRoll prints in the REFRESH label).
+local lastRoll = { country = nil, year = nil }
 RollResult.OnClientEvent:Connect(function(roll)
-    if type(roll) ~= "table" or type(roll.reveals) ~= "table" then return end
-    local seen, ordered = {}, {}
-    for _, card in pairs(roll.reveals) do
-        if type(card) == "table" and card.country and not seen[card.country] then
-            seen[card.country] = true
-            ordered[#ordered + 1] = card.country
-        end
+    if type(roll) == "table" and roll.country and roll.year then
+        lastRoll = { country = roll.country, year = roll.year }
     end
-    lastRollCountries = ordered
 end)
 
 -- OVR -> tier color (gold / silver / bronze / grey)
@@ -391,7 +383,7 @@ local catBtn = Instance.new("TextButton")
 catBtn.Size = UDim2.new(1, -20, 0, 26)
 catBtn.Position = UDim2.fromOffset(10, 120)
 catBtn.BackgroundColor3 = BG2
-catBtn.Text = "Katalog kart"
+catBtn.Text = "Karty (losowana druzyna)"
 catBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
 catBtn.Font = Enum.Font.GothamSemibold
 catBtn.TextSize = 13
@@ -399,10 +391,11 @@ catBtn.AutoButtonColor = true
 catBtn.Parent = main
 Instance.new("UICorner", catBtn).CornerRadius = UDim.new(0, 8)
 
--- panel
+-- panel: shows the exact team the current roll landed on (country + year),
+-- listing ONLY players whose position is still open on the pitch.
 local cat = Instance.new("Frame")
-cat.Size = UDim2.fromOffset(380, 420)
-cat.Position = UDim2.new(0.5, -190, 0.5, -210)
+cat.Size = UDim2.fromOffset(300, 400)
+cat.Position = UDim2.new(0.5, -150, 0.5, -200)
 cat.BackgroundColor3 = BG
 cat.BorderSizePixel = 0
 cat.Active = true
@@ -415,9 +408,9 @@ do
 end
 
 local catTitle = Instance.new("TextLabel")
-catTitle.Size = UDim2.new(1, 0, 0, 32)
+catTitle.Size = UDim2.new(1, 0, 0, 28)
 catTitle.BackgroundTransparency = 1
-catTitle.Text = "Katalog kart"
+catTitle.Text = "Losowana druzyna"
 catTitle.TextColor3 = Color3.fromRGB(230, 240, 234)
 catTitle.Font = Enum.Font.GothamBold
 catTitle.TextSize = 15
@@ -436,39 +429,31 @@ catClose.Parent = cat
 Instance.new("UICorner", catClose).CornerRadius = UDim.new(0, 6)
 catClose.MouseButton1Click:Connect(function() cat.Visible = false end)
 
--- left: country list
-local countryScroll = Instance.new("ScrollingFrame")
-countryScroll.Size = UDim2.new(0, 130, 1, -50)
-countryScroll.Position = UDim2.fromOffset(10, 40)
-countryScroll.BackgroundColor3 = BG2
-countryScroll.BorderSizePixel = 0
-countryScroll.ScrollBarThickness = 4
-countryScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-countryScroll.Parent = cat
-Instance.new("UICorner", countryScroll).CornerRadius = UDim.new(0, 8)
-do
-    local l = Instance.new("UIListLayout", countryScroll)
-    l.Padding = UDim.new(0, 2); l.SortOrder = Enum.SortOrder.LayoutOrder
-    local pad = Instance.new("UIPadding", countryScroll)
-    pad.PaddingLeft = UDim.new(0, 3); pad.PaddingRight = UDim.new(0, 3)
-    pad.PaddingTop = UDim.new(0, 3)
-end
+local teamHeader = Instance.new("TextLabel")
+teamHeader.Size = UDim2.new(1, -20, 0, 24)
+teamHeader.Position = UDim2.fromOffset(12, 34)
+teamHeader.BackgroundTransparency = 1
+teamHeader.Text = "-"
+teamHeader.TextColor3 = ACCENT
+teamHeader.TextXAlignment = Enum.TextXAlignment.Left
+teamHeader.Font = Enum.Font.GothamBold
+teamHeader.TextSize = 16
+teamHeader.Parent = cat
 
--- right: header + cards
-local cardHeader = Instance.new("TextLabel")
-cardHeader.Size = UDim2.new(1, -160, 0, 22)
-cardHeader.Position = UDim2.fromOffset(150, 44)
-cardHeader.BackgroundTransparency = 1
-cardHeader.Text = "wybierz kraj"
-cardHeader.TextColor3 = ACCENT
-cardHeader.TextXAlignment = Enum.TextXAlignment.Left
-cardHeader.Font = Enum.Font.GothamSemibold
-cardHeader.TextSize = 13
-cardHeader.Parent = cat
+local openLabel = Instance.new("TextLabel")
+openLabel.Size = UDim2.new(1, -20, 0, 16)
+openLabel.Position = UDim2.fromOffset(12, 58)
+openLabel.BackgroundTransparency = 1
+openLabel.Text = ""
+openLabel.TextColor3 = Color3.fromRGB(150, 165, 155)
+openLabel.TextXAlignment = Enum.TextXAlignment.Left
+openLabel.Font = Enum.Font.Gotham
+openLabel.TextSize = 12
+openLabel.Parent = cat
 
 local cardScroll = Instance.new("ScrollingFrame")
-cardScroll.Size = UDim2.new(1, -160, 1, -80)
-cardScroll.Position = UDim2.fromOffset(150, 70)
+cardScroll.Size = UDim2.new(1, -20, 1, -86)
+cardScroll.Position = UDim2.fromOffset(10, 78)
 cardScroll.BackgroundColor3 = BG2
 cardScroll.BorderSizePixel = 0
 cardScroll.ScrollBarThickness = 4
@@ -479,65 +464,77 @@ do
     local l = Instance.new("UIListLayout", cardScroll)
     l.Padding = UDim.new(0, 1); l.SortOrder = Enum.SortOrder.LayoutOrder
     local pad = Instance.new("UIPadding", cardScroll)
-    pad.PaddingLeft = UDim.new(0, 6); pad.PaddingTop = UDim.new(0, 3)
+    pad.PaddingLeft = UDim.new(0, 8); pad.PaddingTop = UDim.new(0, 4)
 end
 
-local function showCountry(country)
+local POS_ORDER = { "GK", "DEF", "MID", "FWD" }
+
+-- render the rolled team (lastRoll.country/year), open positions only
+local function renderTeam()
     for _, c in ipairs(cardScroll:GetChildren()) do
         if c:IsA("TextLabel") then c:Destroy() end
     end
-    local list = catalog[country] or {}
-    cardHeader.Text = string.format("%s  •  %d kart", country, #list)
-    for i, p in ipairs(list) do
-        local row = Instance.new("TextLabel")
-        row.Size = UDim2.new(1, -8, 0, 18)
-        row.BackgroundTransparency = 1
-        row.Font = Enum.Font.RobotoMono
-        row.TextSize = 12
-        row.TextXAlignment = Enum.TextXAlignment.Left
-        row.TextColor3 = ovrColor(p.ovr)
-        row.Text = string.format("%2d  %-3s  %s  '%s", p.ovr, tostring(p.pos),
-                                 tostring(p.name), string.sub(tostring(p.year), -2))
-        row.LayoutOrder = i
-        row.Parent = cardScroll
+    local country, year = lastRoll.country, lastRoll.year
+    local team = country and teamsCY[country] and teamsCY[country][year]
+    if not team then
+        teamHeader.Text = "brak rolla"
+        openLabel.Text = "kliknij Roll w grze"
+        cardScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+        return
     end
-    cardScroll.CanvasSize = UDim2.new(0, 0, 0, #list * 19 + 6)
+    teamHeader.Text = string.format("%s  %s", tostring(country), tostring(year))
+    local ops = {}
+    for _, pk in ipairs(POS_ORDER) do if openPos[pk] == true then ops[#ops + 1] = pk end end
+    openLabel.Text = "wolne pozycje: " .. (#ops > 0 and table.concat(ops, ", ") or "brak (pelna)")
+    local n = 0
+    for _, p in ipairs(team) do
+        if openPos[p.pos] == true then
+            n = n + 1
+            local row = Instance.new("TextLabel")
+            row.Size = UDim2.new(1, -10, 0, 18)
+            row.BackgroundTransparency = 1
+            row.Font = Enum.Font.RobotoMono
+            row.TextSize = 13
+            row.TextXAlignment = Enum.TextXAlignment.Left
+            row.TextColor3 = ovrColor(p.ovr)
+            row.Text = string.format("%2d  %-3s  %s", p.ovr, tostring(p.pos), tostring(p.name))
+            row.LayoutOrder = n
+            row.Parent = cardScroll
+        end
+    end
+    if n == 0 then
+        local row = Instance.new("TextLabel")
+        row.Size = UDim2.new(1, -10, 0, 18)
+        row.BackgroundTransparency = 1
+        row.Font = Enum.Font.Gotham
+        row.TextSize = 12
+        row.TextColor3 = Color3.fromRGB(150, 165, 155)
+        row.Text = "brak graczy na wolnych pozycjach"
+        row.Parent = cardScroll
+        n = 1
+    end
+    cardScroll.CanvasSize = UDim2.new(0, 0, 0, n * 19 + 8)
 end
 
-local function buildCountryList()
-    for _, c in ipairs(countryScroll:GetChildren()) do
-        if c:IsA("TextButton") then c:Destroy() end
+-- auto-refresh while open: re-render when the roll or open positions change
+local lastSig = ""
+task.spawn(function()
+    while alive() do
+        if cat.Visible then
+            local sig = tostring(lastRoll.country) .. "|" .. tostring(lastRoll.year) .. "|" ..
+                        tostring(openPos.GK) .. tostring(openPos.DEF) ..
+                        tostring(openPos.MID) .. tostring(openPos.FWD)
+            if sig ~= lastSig then lastSig = sig; renderTeam() end
+            task.wait(0.25)
+        else
+            task.wait(0.4)
+        end
     end
-    local rolled = {}
-    for _, c in ipairs(lastRollCountries) do rolled[c] = true end
-    local order = {}
-    for _, c in ipairs(lastRollCountries) do order[#order + 1] = c end
-    for _, c in ipairs(countryNames) do if not rolled[c] then order[#order + 1] = c end end
-    for i, country in ipairs(order) do
-        local b = Instance.new("TextButton")
-        b.Size = UDim2.new(1, -6, 0, 22)
-        b.BackgroundColor3 = rolled[country] and Color3.fromRGB(38, 58, 46) or Color3.fromRGB(44, 52, 47)
-        b.Text = (rolled[country] and "» " or "  ") .. country
-        b.TextColor3 = rolled[country] and ACCENT or Color3.fromRGB(215, 222, 218)
-        b.TextXAlignment = Enum.TextXAlignment.Left
-        b.Font = Enum.Font.Gotham
-        b.TextSize = 12
-        b.LayoutOrder = i
-        b.AutoButtonColor = true
-        b.Parent = countryScroll
-        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
-        b.MouseButton1Click:Connect(function() showCountry(country) end)
-    end
-    countryScroll.CanvasSize = UDim2.new(0, 0, 0, #order * 24 + 6)
-    return order
-end
+end)
 
 catBtn.MouseButton1Click:Connect(function()
     cat.Visible = not cat.Visible
-    if cat.Visible then
-        local order = buildCountryList()
-        if order[1] then showCountry(order[1]) end   -- auto-open last-rolled (or first)
-    end
+    if cat.Visible then lastSig = ""; renderTeam() end
 end)
 
 UserInput.InputBegan:Connect(function(i, gpe)
