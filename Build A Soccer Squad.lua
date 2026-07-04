@@ -31,6 +31,7 @@ local RestartRun   = Remotes:WaitForChild("RestartRun")
 -- We recompute open positions from slots on every TeamUpdate.
 -- Default all-open (correct at the start of a fresh run); slots refine it.
 local openPos = { GK = true, DEF = true, MID = true, FWD = true }
+local remaining = {}     -- open slot COUNT per pos (enables optimistic updates)
 local teamFull = false   -- true when every slot has a player (run finished)
 
 -- recompute open positions from the team's slot list.
@@ -49,11 +50,14 @@ local function fromSlots(p)
             end
         end
     end
-    local o = {}
+    local o, rem = {}, {}
     for pos, lim in pairs(limit) do
-        o[pos] = (filled[pos] or 0) < lim
+        local f = filled[pos] or 0
+        o[pos] = f < lim
+        rem[pos] = lim - f
     end
     openPos = o
+    remaining = rem
     teamFull = (total > 0 and filledTotal >= total)
 end
 TeamUpdate.OnClientEvent:Connect(fromSlots)
@@ -97,7 +101,7 @@ local function waitAny(map, timeout)
         end)
     end
     local t0 = tick()
-    repeat task.wait(0.05) until hitName or tick() - t0 > timeout or not alive()
+    repeat task.wait() until hitName or tick() - t0 > timeout or not alive()
     for _, c in ipairs(cons) do c:Disconnect() end
     return hitName, hitPayload
 end
@@ -113,12 +117,15 @@ local ALL_OPEN = { GK = true, DEF = true, MID = true, FWD = true }
 -- end-of-run presentation AND begins the next run. Debounced so the loop and the
 -- skip-watcher can't double-fire it.
 local lastRestart = 0
+local seededRun = false   -- has this run's first TeamUpdate seeded `remaining` yet?
 local function doRestart()
-    if tick() - lastRestart < 1.5 then return end
+    if tick() - lastRestart < 0.5 then return end
     lastRestart = tick()
     RestartRun:FireServer()
     openPos = ALL_OPEN
+    remaining = {}
     teamFull = false
+    seededRun = false
 end
 
 --==================== main loop ====================
@@ -147,30 +154,40 @@ task.spawn(function()
             if ev == "done" then
                 State.status = "run complete -> restart"
                 doRestart()
-                task.wait(1.0)
+                task.wait(0.35)
             elseif ev == "roll" then
                 local key, card = pickBest(payload)
                 if key then
                     PickPlayer:FireServer(key)
                     State.lastPick = string.format("%s %s(%s)", key, tostring(card.name), tostring(card.ovr))
                     State.status = "picked " .. State.lastPick
-                    -- wait for TeamUpdate (refreshes openPos via fromSlots) before next roll
-                    waitAny({ team = TeamUpdate, done = RunComplete }, 4)
-                    task.wait(0.1)
+                    -- OPTIMISTIC: locally consume the slot we just picked so we can
+                    -- roll again immediately (no round-trip wait). TeamUpdate still
+                    -- corrects openPos/remaining asynchronously.
+                    if remaining[key] then
+                        remaining[key] = remaining[key] - 1
+                        if remaining[key] <= 0 then openPos[key] = false end
+                    end
+                    -- first pick of a run: wait once for TeamUpdate to seed exact
+                    -- slot counts (protects the GK=1 cap). Later picks: no wait.
+                    if not seededRun then
+                        waitAny({ team = TeamUpdate, done = RunComplete }, 2)
+                        seededRun = true
+                    end
                 else
                     -- highest-ovr positions all full but roll had no open group -> wait
                     State.status = "no open pos"
-                    task.wait(0.4)
+                    task.wait(0.2)
                 end
             elseif teamFull then
                 -- team already complete but we missed the RunComplete event -> restart
                 State.status = "team full -> restart"
                 doRestart()
-                task.wait(1.0)
+                task.wait(0.35)
             else
                 -- no response (out of coins / not in run) -> back off, retry
                 State.status = "waiting (no roll)"
-                task.wait(1.0)
+                task.wait(0.5)
             end
         end
     end
