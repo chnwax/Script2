@@ -121,45 +121,73 @@ local function pickBuild(base, skip)
 end
 
 -- buttons that pass the filter but refuse to purchase (server rejects) go on a
--- cooldown so we don't teleport to the SAME button over and over each pass.
+-- cooldown so we don't fly to the SAME button over and over each pass.
 local buildCD = {}
 local BUILD_FAIL_CD = 15
 
--- SUPER FAST: chain-buy every affordable button. ONE teleport per button; if it
--- doesn't take, cooldown it and move on (no re-spamming the same button).
+-- noclip: toggle CanCollide on all character parts so we phase through walls
+local function setNoclip(char, on)
+    for _,p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then pcall(function() p.CanCollide = not on end) end
+    end
+end
+
+-- fly the character to a target in fast small steps (looks like flying, not a
+-- teleport jump). Physically overlapping the button part fires a real Touched.
+local FLY_SPEED = 500   -- studs/second
+local function flyTo(h, target, fireFn)
+    local t0 = tick()
+    while alive() do
+        local pos = h.Position
+        local d = target - pos
+        local dist = d.Magnitude
+        if dist < 4 or tick() - t0 > 4 then break end
+        local step = math.min(dist, FLY_SPEED * 0.03)
+        h.CFrame = CFrame.new(pos + d.Unit * step)
+        pcall(function() h.AssemblyLinearVelocity = Vector3.zero end)
+        if fireFn then fireFn() end   -- fire touches en route too
+        task.wait(0.03)
+    end
+end
+
+-- VERSION 2: noclip-fly to each button (no teleport jumps, no per-button spam).
 local function doBuild(base)
-    local _, hrp = getChar()
-    if not hrp then return false end
+    local char, hrp = getChar()
+    if not char or not hrp then return false end
     local skip, built = {}, false
-    -- seed skip with buttons still on failure cooldown
     for btn, t in pairs(buildCD) do
         if btn.Parent == nil or tick() >= t then buildCD[btn] = nil else skip[btn] = true end
     end
+    setNoclip(char, true)
     for _ = 1, 60 do
         if not alive() then break end
         local pick = pickBuild(base, skip)
         if not pick then break end
         local _, h = getChar()
         if not h then break end
-        -- ONE teleport, then fire the touch a few times checking after each.
-        h.CFrame = CFrame.new(pick.anchor.Position + Vector3.new(0, 3, 0))
-        task.wait(0.08)
-        local bought = false
-        for _ = 1, 6 do
+        local target = pick.anchor.Position + Vector3.new(0, 3, 0)
+        local fire = function()
             for _,p in ipairs(pick.parts) do
                 pcall(firetouchinterest, h, p, 0)
                 pcall(firetouchinterest, h, p, 1)
             end
+        end
+        flyTo(h, target, fire)          -- fly there, firing en route
+        local bought = false
+        for _ = 1, 5 do                 -- a few more fires on arrival
+            fire()
             if pick.btn.Parent == nil then bought = true break end
-            task.wait(0.04)
+            task.wait(0.03)
         end
         if bought then
-            built = true                 -- purchased, buy next (deps may unlock more)
+            built = true
         else
-            skip[pick.btn] = true        -- skip this pass
-            buildCD[pick.btn] = tick() + BUILD_FAIL_CD  -- and don't retry for a while
+            skip[pick.btn] = true
+            buildCD[pick.btn] = tick() + BUILD_FAIL_CD
         end
     end
+    local c2 = plr.Character
+    if c2 then setNoclip(c2, false) end   -- re-enable collision so we don't fall through
     return built
 end
 
