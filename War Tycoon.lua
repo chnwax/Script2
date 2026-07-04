@@ -132,18 +132,22 @@ local function doBuild(base)
         if not pick then break end
         local _, h = getChar()
         if not h then break end
-        -- teleport + hammer the touch until the button actually disappears.
-        -- server proximity-validates, so re-teleport each attempt and dwell.
+        -- SUPER FAST: teleport once, hammer touches back-to-back checking after
+        -- each fire, break the instant the button disappears. Re-teleport only
+        -- if a whole burst didn't take (server proximity needs a re-settle).
         local bought = false
-        for _ = 1, 6 do
+        for tp = 1, 3 do
             h.CFrame = CFrame.new(pick.anchor.Position + Vector3.new(0, 3, 0))
-            task.wait(0.12)
-            for _,p in ipairs(pick.parts) do
-                pcall(firetouchinterest, h, p, 0)
-                pcall(firetouchinterest, h, p, 1)
+            task.wait(tp == 1 and 0.06 or 0.1)
+            for _ = 1, 4 do
+                for _,p in ipairs(pick.parts) do
+                    pcall(firetouchinterest, h, p, 0)
+                    pcall(firetouchinterest, h, p, 1)
+                end
+                if pick.btn.Parent == nil then bought = true break end
+                task.wait(0.03)
             end
-            task.wait(0.08)
-            if pick.btn.Parent == nil then bought = true break end
+            if bought then break end
         end
         if bought then
             built = true            -- purchased, buy next (deps may now unlock more)
