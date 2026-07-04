@@ -286,11 +286,17 @@ local function doAirdrop()
 end
 
 --==================== AUTO CAPTURE POINT ====================
+-- center of the point. FlagStand exists only while contested; fall back to
+-- the always-present TubeBottom (or any part) so we can always find it.
 local function capturePos()
     local gs = workspace:FindFirstChild("Game Systems")
     local cp = gs and gs:FindFirstChild("CapturePoint")
-    local stand = cp and cp:FindFirstChild("FlagStand")
-    if stand then return stand:GetPivot().Position end
+    if not cp then return end
+    local anchor = cp:FindFirstChild("FlagStand") or cp:FindFirstChild("Flag")
+                or cp:FindFirstChild("TubeBottom")
+    if anchor then return anchor:GetPivot().Position end
+    local ok, p = pcall(function() return cp:GetPivot().Position end)
+    if ok then return p end
 end
 local function capturedByMe()
     local gs = workspace:FindFirstChild("Game Systems")
@@ -301,20 +307,31 @@ end
 -- Capture is staged: standing on the point first PULLS DOWN the current
 -- holder's flag, THEN raises ours. Must keep standing through BOTH stages —
 -- hold until our flag is actually up (capturedByMe), not just enemy's down.
-local CAPTURE_MAX = 45   -- seconds to keep contesting before yielding a tick
+local CAPTURE_MAX    = 45   -- seconds to keep contesting before yielding a tick
+local CAPTURE_RADIUS = 16   -- point radius (server-side)
 local function doCapture()
     if capturedByMe() then return false end
     local pos = capturePos()
     local _, hrp = getChar()
     if not pos or not hrp then return false end
+    -- stand slightly off the pole, at our own body height (don't slam onto flag center)
+    local stand = Vector3.new(pos.X + 3, hrp.Position.Y, pos.Z + 3)
+    hrp.CFrame = CFrame.new(stand)   -- teleport ONCE
+    task.wait(0.15)
     local t0 = tick()
     while tick() - t0 < CAPTURE_MAX do
         local _, h = getChar()
         if not h then break end            -- died -> loop out (death hook sets cooldown)
-        h.CFrame = CFrame.new(pos + Vector3.new(0, 4, 0))  -- resist knockback, stay planted
         if capturedByMe() then break end   -- OUR flag raised -> done
         if not alive() then break end
-        task.wait(0.25)
+        -- kill knockback velocity so we don't drift out; only re-teleport if we
+        -- actually got pushed off the point (avoids constant teleport spam).
+        pcall(function() h.AssemblyLinearVelocity = Vector3.zero end)
+        local flat = Vector3.new(h.Position.X - pos.X, 0, h.Position.Z - pos.Z)
+        if flat.Magnitude > CAPTURE_RADIUS - 4 then
+            h.CFrame = CFrame.new(pos.X + 3, h.Position.Y, pos.Z + 3)  -- drifted off; recenter
+        end
+        task.wait(0.2)
     end
     return true
 end
