@@ -329,9 +329,10 @@ local function doCapture()
     local pos = capturePos()
     local _, hrp = getChar()
     if not pos or not hrp then return false end
-    -- stand just off the pole at a FIXED height (our current body Y). Never reuse
-    -- h.Position.Y after a knockback or it launches us into the sky and far away.
-    local standY = hrp.Position.Y
+    -- stand just off the pole at the POINT's own height (+4 to sit on top of the
+    -- stand). Do NOT use hrp.Position.Y — the player is often far below the
+    -- elevated point, which teleported us underground / nowhere.
+    local standY = pos.Y + 4
     local stand = Vector3.new(pos.X + 3, standY, pos.Z + 3)
     pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
     hrp.CFrame = CFrame.new(stand)   -- teleport ONCE
