@@ -236,6 +236,17 @@ do
     end
 end
 
+-- sorted lists for the browse-all panel
+local countryNames, yearList = {}, {}
+do
+    local ys = {}
+    for country in pairs(teamsCY) do countryNames[#countryNames + 1] = country end
+    for year in pairs(WorldCupData.Teams) do ys[year] = true end
+    for y in pairs(ys) do yearList[#yearList + 1] = y end
+    table.sort(countryNames)
+    table.sort(yearList)
+end
+
 -- the exact team the most recent roll landed on (RollResult carries top-level
 -- .country and .year — the same values showRoll prints in the REFRESH label).
 local lastRoll = { country = nil, year = nil }
@@ -270,7 +281,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(230, 152)
+main.Size = UDim2.fromOffset(230, 184)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -537,11 +548,224 @@ catBtn.MouseButton1Click:Connect(function()
     if cat.Visible then lastSig = ""; renderTeam() end
 end)
 
+--==================== browse-all panel (all cards, filter by year) ====================
+local browseBtn = Instance.new("TextButton")
+browseBtn.Size = UDim2.new(1, -20, 0, 26)
+browseBtn.Position = UDim2.fromOffset(10, 150)
+browseBtn.BackgroundColor3 = BG2
+browseBtn.Text = "Wszystkie karty"
+browseBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
+browseBtn.Font = Enum.Font.GothamSemibold
+browseBtn.TextSize = 13
+browseBtn.AutoButtonColor = true
+browseBtn.Parent = main
+Instance.new("UICorner", browseBtn).CornerRadius = UDim.new(0, 8)
+
+local br = Instance.new("Frame")
+br.Size = UDim2.fromOffset(430, 430)
+br.Position = UDim2.new(0.5, -215, 0.5, -215)
+br.BackgroundColor3 = BG
+br.BorderSizePixel = 0
+br.Active = true
+br.Visible = false
+br.Parent = gui
+Instance.new("UICorner", br).CornerRadius = UDim.new(0, 10)
+do
+    local s = Instance.new("UIStroke", br)
+    s.Color = ACCENT; s.Thickness = 1.5; s.Transparency = 0.3
+end
+
+local brTitle = Instance.new("TextLabel")
+brTitle.Size = UDim2.new(1, 0, 0, 30)
+brTitle.BackgroundTransparency = 1
+brTitle.Text = "Wszystkie karty"
+brTitle.TextColor3 = Color3.fromRGB(230, 240, 234)
+brTitle.Font = Enum.Font.GothamBold
+brTitle.TextSize = 15
+brTitle.Parent = br
+makeDraggable(br, brTitle)
+
+local brClose = Instance.new("TextButton")
+brClose.Size = UDim2.fromOffset(24, 24)
+brClose.Position = UDim2.new(1, -30, 0, 4)
+brClose.BackgroundColor3 = Color3.fromRGB(70, 46, 46)
+brClose.Text = "X"
+brClose.TextColor3 = Color3.fromRGB(240, 210, 210)
+brClose.Font = Enum.Font.GothamBold
+brClose.TextSize = 13
+brClose.Parent = br
+Instance.new("UICorner", brClose).CornerRadius = UDim.new(0, 6)
+brClose.MouseButton1Click:Connect(function() br.Visible = false end)
+
+-- left: country list
+local brCountryScroll = Instance.new("ScrollingFrame")
+brCountryScroll.Size = UDim2.new(0, 130, 1, -46)
+brCountryScroll.Position = UDim2.fromOffset(10, 38)
+brCountryScroll.BackgroundColor3 = BG2
+brCountryScroll.BorderSizePixel = 0
+brCountryScroll.ScrollBarThickness = 4
+brCountryScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+brCountryScroll.Parent = br
+Instance.new("UICorner", brCountryScroll).CornerRadius = UDim.new(0, 8)
+do
+    local l = Instance.new("UIListLayout", brCountryScroll)
+    l.Padding = UDim.new(0, 2); l.SortOrder = Enum.SortOrder.LayoutOrder
+    local pad = Instance.new("UIPadding", brCountryScroll)
+    pad.PaddingLeft = UDim.new(0, 3); pad.PaddingRight = UDim.new(0, 3); pad.PaddingTop = UDim.new(0, 3)
+end
+
+-- top-right: year filter chips
+local yearBar = Instance.new("Frame")
+yearBar.Size = UDim2.new(1, -160, 0, 44)
+yearBar.Position = UDim2.fromOffset(150, 38)
+yearBar.BackgroundTransparency = 1
+yearBar.Parent = br
+do
+    local g = Instance.new("UIGridLayout", yearBar)
+    g.CellSize = UDim2.fromOffset(42, 18)
+    g.CellPadding = UDim2.fromOffset(3, 3)
+    g.SortOrder = Enum.SortOrder.LayoutOrder
+end
+
+-- right: header + cards
+local brHeader = Instance.new("TextLabel")
+brHeader.Size = UDim2.new(1, -160, 0, 20)
+brHeader.Position = UDim2.fromOffset(150, 86)
+brHeader.BackgroundTransparency = 1
+brHeader.Text = "wybierz kraj"
+brHeader.TextColor3 = ACCENT
+brHeader.TextXAlignment = Enum.TextXAlignment.Left
+brHeader.Font = Enum.Font.GothamSemibold
+brHeader.TextSize = 13
+brHeader.Parent = br
+
+local brCardScroll = Instance.new("ScrollingFrame")
+brCardScroll.Size = UDim2.new(1, -160, 1, -120)
+brCardScroll.Position = UDim2.fromOffset(150, 108)
+brCardScroll.BackgroundColor3 = BG2
+brCardScroll.BorderSizePixel = 0
+brCardScroll.ScrollBarThickness = 4
+brCardScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+brCardScroll.Parent = br
+Instance.new("UICorner", brCardScroll).CornerRadius = UDim.new(0, 8)
+do
+    local l = Instance.new("UIListLayout", brCardScroll)
+    l.Padding = UDim.new(0, 1); l.SortOrder = Enum.SortOrder.LayoutOrder
+    local pad = Instance.new("UIPadding", brCardScroll)
+    pad.PaddingLeft = UDim.new(0, 8); pad.PaddingTop = UDim.new(0, 4)
+end
+
+local brCountry                 -- selected country
+local selectedYear = nil        -- nil = all years
+local yearChips = {}
+
+local function renderBrowse()
+    for _, c in ipairs(brCardScroll:GetChildren()) do
+        if c:IsA("TextLabel") then c:Destroy() end
+    end
+    if not brCountry or not teamsCY[brCountry] then
+        brHeader.Text = "wybierz kraj"
+        brCardScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+        return
+    end
+    local rows = {}
+    if selectedYear then
+        local l = teamsCY[brCountry][selectedYear]
+        if l then for _, p in ipairs(l) do rows[#rows + 1] = { ovr = p.ovr, pos = p.pos, name = p.name, year = selectedYear } end end
+    else
+        for _, y in ipairs(yearList) do
+            local l = teamsCY[brCountry][y]
+            if l then for _, p in ipairs(l) do rows[#rows + 1] = { ovr = p.ovr, pos = p.pos, name = p.name, year = y } end end
+        end
+    end
+    table.sort(rows, function(a, b)
+        if a.ovr == b.ovr then return a.name < b.name end
+        return a.ovr > b.ovr
+    end)
+    brHeader.Text = string.format("%s  •  %d kart  (%s)", brCountry, #rows,
+        selectedYear and tostring(selectedYear) or "wszystkie lata")
+    for i, p in ipairs(rows) do
+        local row = Instance.new("TextLabel")
+        row.Size = UDim2.new(1, -10, 0, 18)
+        row.BackgroundTransparency = 1
+        row.Font = Enum.Font.RobotoMono
+        row.TextSize = 12
+        row.TextXAlignment = Enum.TextXAlignment.Left
+        row.TextColor3 = ovrColor(p.ovr)
+        row.Text = string.format("%2d  %-3s  %s  '%s", p.ovr, tostring(p.pos),
+            tostring(p.name), string.sub(tostring(p.year), -2))
+        row.LayoutOrder = i
+        row.Parent = brCardScroll
+    end
+    brCardScroll.CanvasSize = UDim2.new(0, 0, 0, #rows * 19 + 8)
+end
+
+local function refreshChips()
+    for key, btn in pairs(yearChips) do
+        local on = (key == "ALL" and selectedYear == nil) or (key == selectedYear)
+        btn.BackgroundColor3 = on and ACCENT or Color3.fromRGB(44, 52, 47)
+        btn.TextColor3 = on and Color3.fromRGB(18, 26, 20) or Color3.fromRGB(215, 222, 218)
+    end
+end
+
+do  -- build year chips once: "Wsz" + each year
+    local function addChip(key, text, order)
+        local b = Instance.new("TextButton")
+        b.Text = text
+        b.Font = Enum.Font.GothamSemibold
+        b.TextSize = 11
+        b.AutoButtonColor = true
+        b.LayoutOrder = order
+        b.Parent = yearBar
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+        yearChips[key] = b
+        b.MouseButton1Click:Connect(function()
+            selectedYear = (key == "ALL") and nil or key
+            refreshChips(); renderBrowse()
+        end)
+    end
+    addChip("ALL", "Wsz", 0)
+    for i, y in ipairs(yearList) do addChip(y, tostring(y), i) end
+    refreshChips()
+end
+
+local function buildBrowseCountries()
+    for _, c in ipairs(brCountryScroll:GetChildren()) do
+        if c:IsA("TextButton") then c:Destroy() end
+    end
+    for i, country in ipairs(countryNames) do
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(1, -6, 0, 22)
+        b.BackgroundColor3 = Color3.fromRGB(44, 52, 47)
+        b.Text = "  " .. country
+        b.TextColor3 = Color3.fromRGB(215, 222, 218)
+        b.TextXAlignment = Enum.TextXAlignment.Left
+        b.Font = Enum.Font.Gotham
+        b.TextSize = 12
+        b.LayoutOrder = i
+        b.AutoButtonColor = true
+        b.Parent = brCountryScroll
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+        b.MouseButton1Click:Connect(function() brCountry = country; renderBrowse() end)
+    end
+    brCountryScroll.CanvasSize = UDim2.new(0, 0, 0, #countryNames * 24 + 6)
+end
+
+buildBrowseCountries()
+
+browseBtn.MouseButton1Click:Connect(function()
+    br.Visible = not br.Visible
+    if br.Visible and not brCountry and countryNames[1] then
+        brCountry = countryNames[1]; renderBrowse()
+    end
+end)
+
 UserInput.InputBegan:Connect(function(i, gpe)
     if gpe then return end
     if i.KeyCode == Enum.KeyCode.RightShift then
         main.Visible = not main.Visible
         cat.Visible = false
+        br.Visible = false
     end
 end)
 
