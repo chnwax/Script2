@@ -126,24 +126,29 @@ local function doBuild(base)
     local _, hrp = getChar()
     if not hrp then return false end
     local skip, built = {}, false
-    for _ = 1, 25 do
+    for _ = 1, 60 do
+        if not alive() then break end
         local pick = pickBuild(base, skip)
         if not pick then break end
-        hrp.CFrame = CFrame.new(pick.anchor.Position + Vector3.new(0, 3, 0))
-        task.wait(0.1)
         local _, h = getChar()
-        for _ = 1, 3 do
-            if not h then break end
+        if not h then break end
+        -- teleport + hammer the touch until the button actually disappears.
+        -- server proximity-validates, so re-teleport each attempt and dwell.
+        local bought = false
+        for _ = 1, 6 do
+            h.CFrame = CFrame.new(pick.anchor.Position + Vector3.new(0, 3, 0))
+            task.wait(0.12)
             for _,p in ipairs(pick.parts) do
                 pcall(firetouchinterest, h, p, 0)
                 pcall(firetouchinterest, h, p, 1)
             end
-            task.wait(0.05)
+            task.wait(0.08)
+            if pick.btn.Parent == nil then bought = true break end
         end
-        if pick.btn.Parent == nil then
-            built = true            -- purchased, buy next
+        if bought then
+            built = true            -- purchased, buy next (deps may now unlock more)
         else
-            skip[pick.btn] = true   -- didn't take; don't reselect this pass
+            skip[pick.btn] = true   -- couldn't take it this pass; try others
         end
     end
     return built
@@ -293,20 +298,23 @@ local function capturedByMe()
     local ct = cp and cp:FindFirstChild("Captured Team")
     return ct ~= nil and plr.Team ~= nil and ct.Value == plr.Team.Name
 end
--- park on the flag and hold ~3s to accumulate capture; yields to farm between ticks
+-- Capture is staged: standing on the point first PULLS DOWN the current
+-- holder's flag, THEN raises ours. Must keep standing through BOTH stages —
+-- hold until our flag is actually up (capturedByMe), not just enemy's down.
+local CAPTURE_MAX = 45   -- seconds to keep contesting before yielding a tick
 local function doCapture()
     if capturedByMe() then return false end
     local pos = capturePos()
     local _, hrp = getChar()
     if not pos or not hrp then return false end
     local t0 = tick()
-    while tick() - t0 < 3 do
+    while tick() - t0 < CAPTURE_MAX do
         local _, h = getChar()
-        if not h then break end
-        h.CFrame = CFrame.new(pos + Vector3.new(0, 4, 0))  -- resist knockback
-        if capturedByMe() then break end
+        if not h then break end            -- died -> loop out (death hook sets cooldown)
+        h.CFrame = CFrame.new(pos + Vector3.new(0, 4, 0))  -- resist knockback, stay planted
+        if capturedByMe() then break end   -- OUR flag raised -> done
         if not alive() then break end
-        task.wait(0.3)
+        task.wait(0.25)
     end
     return true
 end
