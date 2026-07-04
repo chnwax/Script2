@@ -236,14 +236,29 @@ do
     end
 end
 
--- sorted lists for the browse-all panel
+-- Polish country names (display only; teamsCY keys stay English)
+local PL = {
+    Argentina = "Argentyna", Belgium = "Belgia", Brazil = "Brazylia",
+    Canada = "Kanada", Chile = "Chile", Colombia = "Kolumbia",
+    ["Costa Rica"] = "Kostaryka", Croatia = "Chorwacja", Egypt = "Egipt",
+    England = "Anglia", France = "Francja", Germany = "Niemcy",
+    Ghana = "Ghana", Italy = "Wlochy", ["Ivory Coast"] = "Wybrzeze Kosci Sloniowej",
+    Japan = "Japonia", Mexico = "Meksyk", Morocco = "Maroko",
+    Netherlands = "Holandia", Norway = "Norwegia", Poland = "Polska",
+    Portugal = "Portugalia", Senegal = "Senegal", ["South Korea"] = "Korea Poludniowa",
+    Spain = "Hiszpania", Sweden = "Szwecja", Turkey = "Turcja",
+    USA = "USA", Uruguay = "Urugwaj", Wales = "Walia",
+}
+local function plName(c) return PL[c] or c end
+
+-- sorted lists for the browse-all panel (sorted by Polish display name)
 local countryNames, yearList = {}, {}
 do
     local ys = {}
     for country in pairs(teamsCY) do countryNames[#countryNames + 1] = country end
     for year in pairs(WorldCupData.Teams) do ys[year] = true end
     for y in pairs(ys) do yearList[#yearList + 1] = y end
-    table.sort(countryNames)
+    table.sort(countryNames, function(a, b) return plName(a) < plName(b) end)
     table.sort(yearList)
 end
 
@@ -493,7 +508,7 @@ local function renderTeam()
         cardScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
         return
     end
-    teamHeader.Text = string.format("%s  %s", tostring(country), tostring(year))
+    teamHeader.Text = string.format("%s  %s", plName(country), tostring(year))
     local ops = {}
     for _, pk in ipairs(POS_ORDER) do if openPos[pk] == true then ops[#ops + 1] = pk end end
     openLabel.Text = "wolne pozycje: " .. (#ops > 0 and table.concat(ops, ", ") or "brak (pelna)")
@@ -597,10 +612,29 @@ brClose.Parent = br
 Instance.new("UICorner", brClose).CornerRadius = UDim.new(0, 6)
 brClose.MouseButton1Click:Connect(function() br.Visible = false end)
 
--- left: country list
+-- left: search box + country list
+local searchBox = Instance.new("TextBox")
+searchBox.Size = UDim2.new(0, 130, 0, 24)
+searchBox.Position = UDim2.fromOffset(10, 38)
+searchBox.BackgroundColor3 = BG2
+searchBox.Text = ""
+searchBox.PlaceholderText = "szukaj kraju..."
+searchBox.PlaceholderColor3 = Color3.fromRGB(120, 132, 126)
+searchBox.TextColor3 = Color3.fromRGB(225, 232, 228)
+searchBox.Font = Enum.Font.Gotham
+searchBox.TextSize = 12
+searchBox.TextXAlignment = Enum.TextXAlignment.Left
+searchBox.ClearTextOnFocus = false
+searchBox.Parent = br
+Instance.new("UICorner", searchBox).CornerRadius = UDim.new(0, 6)
+do
+    local pad = Instance.new("UIPadding", searchBox)
+    pad.PaddingLeft = UDim.new(0, 6); pad.PaddingRight = UDim.new(0, 6)
+end
+
 local brCountryScroll = Instance.new("ScrollingFrame")
-brCountryScroll.Size = UDim2.new(0, 130, 1, -46)
-brCountryScroll.Position = UDim2.fromOffset(10, 38)
+brCountryScroll.Size = UDim2.new(0, 130, 1, -76)
+brCountryScroll.Position = UDim2.fromOffset(10, 68)
 brCountryScroll.BackgroundColor3 = BG2
 brCountryScroll.BorderSizePixel = 0
 brCountryScroll.ScrollBarThickness = 4
@@ -682,7 +716,7 @@ local function renderBrowse()
         if a.ovr == b.ovr then return a.name < b.name end
         return a.ovr > b.ovr
     end)
-    brHeader.Text = string.format("%s  •  %d kart  (%s)", brCountry, #rows,
+    brHeader.Text = string.format("%s  •  %d kart  (%s)", plName(brCountry), #rows,
         selectedYear and tostring(selectedYear) or "wszystkie lata")
     for i, p in ipairs(rows) do
         local row = Instance.new("TextLabel")
@@ -729,29 +763,39 @@ do  -- build year chips once: "Wsz" + each year
     refreshChips()
 end
 
-local function buildBrowseCountries()
+local function buildBrowseCountries(query)
     for _, c in ipairs(brCountryScroll:GetChildren()) do
         if c:IsA("TextButton") then c:Destroy() end
     end
-    for i, country in ipairs(countryNames) do
-        local b = Instance.new("TextButton")
-        b.Size = UDim2.new(1, -6, 0, 22)
-        b.BackgroundColor3 = Color3.fromRGB(44, 52, 47)
-        b.Text = "  " .. country
-        b.TextColor3 = Color3.fromRGB(215, 222, 218)
-        b.TextXAlignment = Enum.TextXAlignment.Left
-        b.Font = Enum.Font.Gotham
-        b.TextSize = 12
-        b.LayoutOrder = i
-        b.AutoButtonColor = true
-        b.Parent = brCountryScroll
-        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
-        b.MouseButton1Click:Connect(function() brCountry = country; renderBrowse() end)
+    query = (query or ""):lower()
+    local n = 0
+    for _, country in ipairs(countryNames) do
+        -- match Polish OR English name
+        if query == "" or plName(country):lower():find(query, 1, true)
+                        or country:lower():find(query, 1, true) then
+            n = n + 1
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(1, -6, 0, 22)
+            b.BackgroundColor3 = Color3.fromRGB(44, 52, 47)
+            b.Text = "  " .. plName(country)
+            b.TextColor3 = Color3.fromRGB(215, 222, 218)
+            b.TextXAlignment = Enum.TextXAlignment.Left
+            b.Font = Enum.Font.Gotham
+            b.TextSize = 12
+            b.LayoutOrder = n
+            b.AutoButtonColor = true
+            b.Parent = brCountryScroll
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+            b.MouseButton1Click:Connect(function() brCountry = country; renderBrowse() end)
+        end
     end
-    brCountryScroll.CanvasSize = UDim2.new(0, 0, 0, #countryNames * 24 + 6)
+    brCountryScroll.CanvasSize = UDim2.new(0, 0, 0, n * 24 + 6)
 end
 
 buildBrowseCountries()
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    buildBrowseCountries(searchBox.Text)
+end)
 
 browseBtn.MouseButton1Click:Connect(function()
     br.Visible = not br.Visible
