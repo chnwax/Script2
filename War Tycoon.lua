@@ -120,39 +120,44 @@ local function pickBuild(base, skip)
     return best
 end
 
--- SUPER FAST: chain-buy every affordable button in one pass, no restore
--- (stays at the last button; teleport-back skipped on purpose)
+-- buttons that pass the filter but refuse to purchase (server rejects) go on a
+-- cooldown so we don't teleport to the SAME button over and over each pass.
+local buildCD = {}
+local BUILD_FAIL_CD = 15
+
+-- SUPER FAST: chain-buy every affordable button. ONE teleport per button; if it
+-- doesn't take, cooldown it and move on (no re-spamming the same button).
 local function doBuild(base)
     local _, hrp = getChar()
     if not hrp then return false end
     local skip, built = {}, false
+    -- seed skip with buttons still on failure cooldown
+    for btn, t in pairs(buildCD) do
+        if btn.Parent == nil or tick() >= t then buildCD[btn] = nil else skip[btn] = true end
+    end
     for _ = 1, 60 do
         if not alive() then break end
         local pick = pickBuild(base, skip)
         if not pick then break end
         local _, h = getChar()
         if not h then break end
-        -- SUPER FAST: teleport once, hammer touches back-to-back checking after
-        -- each fire, break the instant the button disappears. Re-teleport only
-        -- if a whole burst didn't take (server proximity needs a re-settle).
+        -- ONE teleport, then fire the touch a few times checking after each.
+        h.CFrame = CFrame.new(pick.anchor.Position + Vector3.new(0, 3, 0))
+        task.wait(0.08)
         local bought = false
-        for tp = 1, 3 do
-            h.CFrame = CFrame.new(pick.anchor.Position + Vector3.new(0, 3, 0))
-            task.wait(tp == 1 and 0.06 or 0.1)
-            for _ = 1, 4 do
-                for _,p in ipairs(pick.parts) do
-                    pcall(firetouchinterest, h, p, 0)
-                    pcall(firetouchinterest, h, p, 1)
-                end
-                if pick.btn.Parent == nil then bought = true break end
-                task.wait(0.03)
+        for _ = 1, 6 do
+            for _,p in ipairs(pick.parts) do
+                pcall(firetouchinterest, h, p, 0)
+                pcall(firetouchinterest, h, p, 1)
             end
-            if bought then break end
+            if pick.btn.Parent == nil then bought = true break end
+            task.wait(0.04)
         end
         if bought then
-            built = true            -- purchased, buy next (deps may now unlock more)
+            built = true                 -- purchased, buy next (deps may unlock more)
         else
-            skip[pick.btn] = true   -- couldn't take it this pass; try others
+            skip[pick.btn] = true        -- skip this pass
+            buildCD[pick.btn] = tick() + BUILD_FAIL_CD  -- and don't retry for a while
         end
     end
     return built
