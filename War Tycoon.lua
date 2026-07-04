@@ -38,6 +38,12 @@ local function getCash()
     return c and c.Value or 0
 end
 
+local function getRebirths()
+    local ls = plr:FindFirstChild("leaderstats")
+    local r  = ls and ls:FindFirstChild("Rebirths")
+    return r and r.Value or 0
+end
+
 -- teleport hrp to pos, run fn, restore original CFrame
 local function atPos(pos, fn)
     local _, hrp = getChar()
@@ -75,15 +81,29 @@ local function triggerParts(btn)
     return out, anchor or out[1]
 end
 
+-- buildable = Cash button we can afford, OR Rebirth-gated free unlock
+-- (ButtonType "Rebirth", Price 0, RebirthRequirement <= our rebirths).
+local function buyable(base, btn, cash, rebirths)
+    local bt = btn:GetAttribute("ButtonType")
+    if bt == "Cash" then
+        local price = btn:GetAttribute("Price") or 0
+        return price <= cash and depOk(base, btn), price
+    elseif bt == "Rebirth" then
+        local req = tonumber(btn:GetAttribute("RebirthRequirement")) or 0
+        return rebirths >= req and depOk(base, btn), 0
+    end
+    return false
+end
+
 local function pickBuild(base, skip)
     local ub = base:FindFirstChild("UnpurchasedButtons")
     if not ub then return end
-    local cash = getCash()
+    local cash, rebirths = getCash(), getRebirths()
     local best, bestScore
     for _,btn in ipairs(ub:GetChildren()) do
-        if btn:GetAttribute("ButtonType") == "Cash" and not (skip and skip[btn]) then
-            local price = btn:GetAttribute("Price") or 0
-            if price <= cash and depOk(base, btn) then
+        if not (skip and skip[btn]) then
+            local ok, price = buyable(base, btn, cash, rebirths)
+            if ok then
                 local parts, anchor = triggerParts(btn)
                 if anchor then
                     local nm = (btn.Name .. " " .. tostring(btn:GetAttribute("Objects"))):lower()
@@ -326,7 +346,28 @@ end
 
 --==================== STATE + MAIN LOOP ====================
 local State = { running = false, build = true, collectOil = true, collectCash = true,
-                airdrop = true, capture = false, rebirth = false, busy = false, status = "idle" }
+                airdrop = true, capture = false, rebirth = false, busy = false,
+                capturingNow = false, status = "idle" }
+
+-- scheduling: collect cash/oil once a minute, build in bursts then wait a minute,
+-- capture is top ongoing priority, rebirth instant, 3-min cooldown if we die capturing.
+local COLLECT_INTERVAL = 60
+local BUILD_WAIT       = 60
+local CAPTURE_DEATH_CD = 180
+local nextCash, nextOil, nextBuild, captureCDUntil = 0, 0, 0, 0
+
+local function hookDeath(char)
+    local hum = char:FindFirstChildWhichIsA("Humanoid") or char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    hum.Died:Connect(function()
+        if State.capturingNow then
+            captureCDUntil = tick() + CAPTURE_DEATH_CD   -- died while contesting flag
+            State.capturingNow = false
+        end
+    end)
+end
+if plr.Character then hookDeath(plr.Character) end
+plr.CharacterAdded:Connect(hookDeath)
 
 task.spawn(function()
     while alive() do
@@ -335,28 +376,33 @@ task.spawn(function()
             local _, hrp = getChar()
             if base and hrp then
                 State.busy = true
-                local acted = false
-                -- rebirth (blocking priority; wipes base)
+                local now = tick()
+                -- 1) REBIRTH: instant whenever eligible (doRebirth self-throttles)
                 if State.rebirth and doRebirth(base) then
-                    State.status = "rebirthing"; acted = true
-                end
-                -- capture point (blocking; only while not held by our team)
-                if not acted and State.capture and not capturedByMe() and doCapture() then
-                    State.status = "capturing"; acted = true
-                end
-                if not acted then
-                    -- ONE collect action per tick (cash > oil > airdrop)
-                    local collected
-                    if State.collectCash and doCollectCash(base) then collected = "cash"
-                    elseif State.collectOil and doCollectOil(base) then collected = "oil"
-                    elseif State.airdrop and doAirdrop() then collected = "airdrop" end
-                    -- build runs INDEPENDENTLY (cheap no-op when nothing affordable)
-                    -- so collecting cash never starves building
-                    local built = State.build and doBuild(base)
-                    if collected and built then State.status = collected .. "+build"
-                    elseif collected then State.status = collected
-                    elseif built then State.status = "building"
-                    else State.status = "idle" end
+                    State.status = "rebirthing"
+                -- 2) CAPTURE: biggest ongoing priority; blocks farm while contesting.
+                --    3-min cooldown after dying on the point.
+                elseif State.capture and not capturedByMe() and now >= captureCDUntil then
+                    State.capturingNow = true
+                    doCapture()
+                    State.capturingNow = false
+                    State.status = capturedByMe() and "captured" or "capturing"
+                else
+                    -- 3..5) scheduled farm actions (each runs at most once per interval)
+                    local did = {}
+                    if State.collectCash and now >= nextCash and doCollectCash(base) then
+                        nextCash = tick() + COLLECT_INTERVAL; did[#did+1] = "cash"
+                    end
+                    if State.collectOil and now >= nextOil and doCollectOil(base) then
+                        nextOil = tick() + COLLECT_INTERVAL; did[#did+1] = "oil"
+                    end
+                    if State.build and now >= nextBuild then
+                        local built = doBuild(base)
+                        if built then nextBuild = 0                 -- keep draining next tick
+                        else nextBuild = tick() + BUILD_WAIT end    -- nothing buildable; wait 1 min
+                        if built then did[#did+1] = "build" end
+                    end
+                    State.status = (#did > 0) and table.concat(did, "+") or "idle"
                 end
                 State.busy = false
             else
