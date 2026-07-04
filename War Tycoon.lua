@@ -224,7 +224,9 @@ local function doCollectOil(base)
     return true
 end
 
--- touch-to-collect accumulated cash (money buildings) at CollectorParts pads
+-- touch-to-collect accumulated cash (money buildings) at CollectorParts pads.
+-- pads sit BELOW the floor; teleporting onto them buries/kills you. Stand at
+-- the base floor height (MainPart.Y) over the pad's XZ instead — still in range.
 local function doCollectCash(base)
     local ess = base:FindFirstChild("Essentials")
     if not ess then return false end
@@ -232,21 +234,30 @@ local function doCollectCash(base)
     if can and can.Value == false then return false end
     local _, hrp = getChar()
     if not hrp then return false end
+    local mp = base:FindFirstChild("MainPart")
+    local floorY = (mp and mp.Position.Y or hrp.Position.Y) + 4
     local did = false
     for _, name in ipairs({"CollectorParts", "CollectorParts2"}) do
         local cp = ess:FindFirstChild(name)
         local part = cp and cp:FindFirstChild("Collector")
         if part then
-            atPos(part.Position, function()
-                local _, h = getChar()
+            local _, h = getChar()
+            if h then
+                local save = h.CFrame
+                h.CFrame = CFrame.new(part.Position.X, floorY, part.Position.Z)
+                pcall(function() h.AssemblyLinearVelocity = Vector3.zero end)
+                task.wait(0.2)
+                local _, h2 = getChar()
                 for _ = 1, 3 do
-                    if not h then break end
-                    pcall(firetouchinterest, h, part, 0)
-                    pcall(firetouchinterest, h, part, 1)
+                    if not h2 then break end
+                    pcall(firetouchinterest, h2, part, 0)
+                    pcall(firetouchinterest, h2, part, 1)
                     task.wait(0.1)
                 end
-            end)
-            did = true
+                local _, h3 = getChar()
+                if h3 then h3.CFrame = save end
+                did = true
+            end
         end
     end
     return did
@@ -314,8 +325,11 @@ local function doCapture()
     local pos = capturePos()
     local _, hrp = getChar()
     if not pos or not hrp then return false end
-    -- stand slightly off the pole, at our own body height (don't slam onto flag center)
-    local stand = Vector3.new(pos.X + 3, hrp.Position.Y, pos.Z + 3)
+    -- stand just off the pole at a FIXED height (our current body Y). Never reuse
+    -- h.Position.Y after a knockback or it launches us into the sky and far away.
+    local standY = hrp.Position.Y
+    local stand = Vector3.new(pos.X + 3, standY, pos.Z + 3)
+    pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
     hrp.CFrame = CFrame.new(stand)   -- teleport ONCE
     task.wait(0.15)
     local t0 = tick()
@@ -324,12 +338,12 @@ local function doCapture()
         if not h then break end            -- died -> loop out (death hook sets cooldown)
         if capturedByMe() then break end   -- OUR flag raised -> done
         if not alive() then break end
-        -- kill knockback velocity so we don't drift out; only re-teleport if we
-        -- actually got pushed off the point (avoids constant teleport spam).
+        -- zero velocity FIRST so we don't get flung, then recenter only if we
+        -- actually drifted off the point (fixed Y — never the launched height).
         pcall(function() h.AssemblyLinearVelocity = Vector3.zero end)
         local flat = Vector3.new(h.Position.X - pos.X, 0, h.Position.Z - pos.Z)
-        if flat.Magnitude > CAPTURE_RADIUS - 4 then
-            h.CFrame = CFrame.new(pos.X + 3, h.Position.Y, pos.Z + 3)  -- drifted off; recenter
+        if flat.Magnitude > CAPTURE_RADIUS - 4 or math.abs(h.Position.Y - standY) > 8 then
+            h.CFrame = CFrame.new(stand)  -- drifted/flung; snap back to fixed spot
         end
         task.wait(0.2)
     end
@@ -370,16 +384,14 @@ local function doRebirth(base)
 end
 
 --==================== STATE + MAIN LOOP ====================
-local State = { running = false, build = true, collectOil = true, collectCash = true,
-                airdrop = true, capture = false, rebirth = false, busy = false,
+-- No master start/stop: each toggle runs on its own, no intervals/limits.
+-- ONLY auto capture keeps limits (3-min cooldown if killed on the point).
+local State = { build = true, collectOil = true, collectCash = true,
+                airdrop = false, capture = false, rebirth = false, busy = false,
                 capturingNow = false, status = "idle" }
 
--- scheduling: collect cash/oil once a minute, build in bursts then wait a minute,
--- capture is top ongoing priority, rebirth instant, 3-min cooldown if we die capturing.
-local COLLECT_INTERVAL = 60
-local BUILD_WAIT       = 60
 local CAPTURE_DEATH_CD = 180
-local nextCash, nextOil, nextBuild, captureCDUntil = 0, 0, 0, 0
+local captureCDUntil = 0
 
 local function hookDeath(char)
     local hum = char:FindFirstChildWhichIsA("Humanoid") or char:WaitForChild("Humanoid", 5)
@@ -396,47 +408,34 @@ plr.CharacterAdded:Connect(hookDeath)
 
 task.spawn(function()
     while alive() do
-        if State.running and not State.busy then
+        if not State.busy then
             local base = getBase()
             local _, hrp = getChar()
             if base and hrp then
                 State.busy = true
-                local now = tick()
-                -- 1) REBIRTH: instant whenever eligible (doRebirth self-throttles)
+                -- REBIRTH: instant whenever eligible (doRebirth self-throttles)
                 if State.rebirth and doRebirth(base) then
                     State.status = "rebirthing"
-                -- 2) CAPTURE: biggest ongoing priority; blocks farm while contesting.
-                --    3-min cooldown after dying on the point.
-                elseif State.capture and not capturedByMe() and now >= captureCDUntil then
+                -- CAPTURE: only feature with limits — 3-min cooldown after dying on point
+                elseif State.capture and not capturedByMe() and tick() >= captureCDUntil then
                     State.capturingNow = true
                     doCapture()
                     State.capturingNow = false
                     State.status = capturedByMe() and "captured" or "capturing"
                 else
-                    -- 3..5) scheduled farm actions (each runs at most once per interval)
+                    -- everything else: no limits, run every loop when toggled on
                     local did = {}
-                    if State.collectCash and now >= nextCash and doCollectCash(base) then
-                        nextCash = tick() + COLLECT_INTERVAL; did[#did+1] = "cash"
-                    end
-                    if State.collectOil and now >= nextOil and doCollectOil(base) then
-                        nextOil = tick() + COLLECT_INTERVAL; did[#did+1] = "oil"
-                    end
-                    if State.build and now >= nextBuild then
-                        local built = doBuild(base)
-                        if built then nextBuild = 0                 -- keep draining next tick
-                        else nextBuild = tick() + BUILD_WAIT end    -- nothing buildable; wait 1 min
-                        if built then did[#did+1] = "build" end
-                    end
+                    if State.collectCash and doCollectCash(base) then did[#did+1] = "cash" end
+                    if State.collectOil  and doCollectOil(base)  then did[#did+1] = "oil"  end
+                    if State.build       and doBuild(base)       then did[#did+1] = "build" end
                     State.status = (#did > 0) and table.concat(did, "+") or "idle"
                 end
                 State.busy = false
             else
                 State.status = "no base"
             end
-        elseif not State.running then
-            State.status = "stopped"
         end
-        task.wait(State.running and 0.5 or 0.3)
+        task.wait(0.3)
     end
 end)
 
@@ -460,7 +459,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(220, 328)
+main.Size = UDim2.fromOffset(220, 250)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -501,18 +500,6 @@ do
         if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
     end)
 end
-
-local startBtn = Instance.new("TextButton")
-startBtn.Size = UDim2.new(1, -20, 0, 34)
-startBtn.Position = UDim2.fromOffset(10, 36)
-startBtn.BackgroundColor3 = GREEN
-startBtn.Text = "START"
-startBtn.TextColor3 = Color3.fromRGB(20, 20, 20)
-startBtn.Font = Enum.Font.GothamBold
-startBtn.TextSize = 15
-startBtn.AutoButtonColor = true
-startBtn.Parent = main
-Instance.new("UICorner", startBtn).CornerRadius = UDim.new(0, 8)
 
 -- toggle row builder
 local function makeToggle(y, label, initial, onChange)
@@ -562,58 +549,34 @@ local function makeToggle(y, label, initial, onChange)
     return holder
 end
 
-makeToggle(78,  "Auto Build",   State.build,       function(v) State.build = v end)
-makeToggle(112, "Collect Oil",   State.collectOil,  function(v) State.collectOil = v end)
-makeToggle(146, "Collect Cash",  State.collectCash, function(v) State.collectCash = v end)
-makeToggle(180, "Auto Airdrop",  State.airdrop,     function(v) State.airdrop = v end)
-makeToggle(214, "Auto Capture",  State.capture,     function(v) State.capture = v end)
-makeToggle(248, "Auto Rebirth",  State.rebirth,     function(v) State.rebirth = v end)
+makeToggle(40,  "Auto Build",    State.build,       function(v) State.build = v end)
+makeToggle(74,  "Collect Oil",   State.collectOil,  function(v) State.collectOil = v end)
+makeToggle(108, "Collect Cash",  State.collectCash, function(v) State.collectCash = v end)
+makeToggle(142, "Auto Capture",  State.capture,     function(v) State.capture = v end)
+makeToggle(176, "Auto Rebirth",  State.rebirth,     function(v) State.rebirth = v end)
 
 local status = Instance.new("TextLabel")
 status.Size = UDim2.new(1, -20, 0, 24)
-status.Position = UDim2.fromOffset(10, 288)
+status.Position = UDim2.fromOffset(10, 214)
 status.BackgroundTransparency = 1
-status.Text = "stopped  •  [RShift]"
+status.Text = "running  •  [RShift hide]"
 status.TextColor3 = Color3.fromRGB(160, 155, 175)
 status.Font = Enum.Font.Gotham
 status.TextSize = 12
 status.Parent = main
 
-local function render()
-    if State.running then
-        startBtn.BackgroundColor3 = RED
-        startBtn.Text = "STOP"
-        startBtn.TextColor3 = Color3.fromRGB(245, 245, 245)
-    else
-        startBtn.BackgroundColor3 = GREEN
-        startBtn.Text = "START"
-        startBtn.TextColor3 = Color3.fromRGB(20, 20, 20)
-    end
-end
-
-local function toggleRun()
-    State.running = not State.running
-    render()
-end
-startBtn.MouseButton1Click:Connect(toggleRun)
-
+-- RightShift hides/shows the panel (features keep running either way)
 UserInput.InputBegan:Connect(function(i, gpe)
     if gpe then return end
-    if i.KeyCode == Enum.KeyCode.RightShift then toggleRun() end
+    if i.KeyCode == Enum.KeyCode.RightShift then main.Visible = not main.Visible end
 end)
 
 -- status ticker
 task.spawn(function()
     while alive() do
-        local cash = getCash()
-        if State.running then
-            status.Text = string.format("%s  •  $%s", State.status, tostring(cash))
-        else
-            status.Text = "stopped  •  [RShift]"
-        end
+        status.Text = string.format("%s  •  $%s", State.status, tostring(getCash()))
         task.wait(0.4)
     end
 end)
 
-render()
-print("[WTAuto] loaded. RightShift or START to run.")
+print("[WTAuto] loaded. Toggles run on their own. RightShift = hide/show.")
