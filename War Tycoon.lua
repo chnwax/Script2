@@ -132,25 +132,31 @@ local function setNoclip(char, on)
     end
 end
 
--- fly the character to a target in fast small steps (looks like flying, not a
--- teleport jump). Physically overlapping the button part fires a real Touched.
-local FLY_SPEED = 500   -- studs/second
-local function flyTo(h, target, fireFn)
-    local t0 = tick()
-    while alive() do
-        local pos = h.Position
-        local d = target - pos
-        local dist = d.Magnitude
-        if dist < 4 or tick() - t0 > 4 then break end
-        local step = math.min(dist, FLY_SPEED * 0.03)
-        h.CFrame = CFrame.new(pos + d.Unit * step)
+-- smooth per-frame glide that flies THROUGH the button (overshoots past it) so
+-- the character physically overlaps the trigger part mid-flight. Fires every
+-- frame and breaks the instant the button is bought.
+local FLY_SPEED = 950   -- studs/second
+local function flyThrough(h, anchorPos, fire, isBought)
+    local start = h.Position
+    local dir = anchorPos - start
+    dir = dir.Magnitude > 1 and dir.Unit or Vector3.new(0, 0, 1)
+    local target = anchorPos + dir * 10          -- overshoot to pass through
+    local total = (target - start).Magnitude
+    local traveled, t0 = 0, tick()
+    while alive() and tick() - t0 < 3 do
+        local dt = RunService.Heartbeat:Wait()
+        traveled = traveled + FLY_SPEED * dt
+        local a = math.min(total > 0 and traveled / total or 1, 1)
+        h.CFrame = CFrame.new(start:Lerp(target, a))
         pcall(function() h.AssemblyLinearVelocity = Vector3.zero end)
-        if fireFn then fireFn() end   -- fire touches en route too
-        task.wait(0.03)
+        fire()
+        if isBought() then return true end
+        if a >= 1 then break end
     end
+    return isBought()
 end
 
--- VERSION 2: noclip-fly to each button (no teleport jumps, no per-button spam).
+-- VERSION 2: smooth noclip fly-through each button (no jumps, no per-button spam).
 local function doBuild(base)
     local char, hrp = getChar()
     if not char or not hrp then return false end
@@ -165,19 +171,21 @@ local function doBuild(base)
         if not pick then break end
         local _, h = getChar()
         if not h then break end
-        local target = pick.anchor.Position + Vector3.new(0, 3, 0)
+        local anchorPos = pick.anchor.Position   -- aim at the part CENTER, fly through it
         local fire = function()
             for _,p in ipairs(pick.parts) do
                 pcall(firetouchinterest, h, p, 0)
                 pcall(firetouchinterest, h, p, 1)
             end
         end
-        flyTo(h, target, fire)          -- fly there, firing en route
-        local bought = false
-        for _ = 1, 5 do                 -- a few more fires on arrival
-            fire()
-            if pick.btn.Parent == nil then bought = true break end
-            task.wait(0.03)
+        local isBought = function() return pick.btn.Parent == nil end
+        local bought = flyThrough(h, anchorPos, fire, isBought)
+        if not bought then           -- one more short pass in case we blew past it
+            for _ = 1, 4 do
+                fire()
+                if isBought() then bought = true break end
+                RunService.Heartbeat:Wait()
+            end
         end
         if bought then
             built = true
