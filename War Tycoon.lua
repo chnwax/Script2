@@ -1,3 +1,11 @@
+--// ============================================================
+--// [BROKEN / ABANDONED] War Tycoon Auto
+--// DOES NOT WORK. Auto Build bugs the character: buttons get
+--// teleported into the player and fling the character upward.
+--// Server-side proximity purchase means teleport is required and
+--// leaves the char parked inside collidable button parts. Left
+--// here for reference only. Do not use.
+--// ============================================================
 --// War Tycoon Auto (Auto Build money plates + Auto Collect cash)
 --// Draggable UI. RightShift = master Start/Stop. Toggles for Build & Collect.
 --// Teleport-based: saves your position, does action, restores. Best used AFK.
@@ -125,67 +133,37 @@ end
 local buildCD = {}
 local BUILD_FAIL_CD = 15
 
--- noclip: toggle CanCollide on all character parts so we phase through walls
-local function setNoclip(char, on)
-    for _,p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") then pcall(function() p.CanCollide = not on end) end
-    end
-end
-
--- smooth per-frame glide that flies THROUGH the button (overshoots past it) so
--- the character physically overlaps the trigger part mid-flight. Fires every
--- frame and breaks the instant the button is bought.
-local FLY_SPEED = 950   -- studs/second
-local function flyThrough(h, anchorPos, fire, isBought)
-    local start = h.Position
-    local dir = anchorPos - start
-    dir = dir.Magnitude > 1 and dir.Unit or Vector3.new(0, 0, 1)
-    local target = anchorPos + dir * 10          -- overshoot to pass through
-    local total = (target - start).Magnitude
-    local traveled, t0 = 0, tick()
-    while alive() and tick() - t0 < 3 do
-        local dt = RunService.Heartbeat:Wait()
-        traveled = traveled + FLY_SPEED * dt
-        local a = math.min(total > 0 and traveled / total or 1, 1)
-        h.CFrame = CFrame.new(start:Lerp(target, a))
-        pcall(function() h.AssemblyLinearVelocity = Vector3.zero end)
-        fire()
-        if isBought() then return true end
-        if a >= 1 then break end
-    end
-    return isBought()
-end
-
--- VERSION 2: smooth noclip fly-through each button (no jumps, no per-button spam).
+-- Teleport BESIDE each button (never into it), fire the touch from ~5 studs
+-- (server proximity is satisfied without overlapping the collidable part, so we
+-- don't get ejected and never end up stuck inside a button). Return home after.
 local function doBuild(base)
     local char, hrp = getChar()
     if not char or not hrp then return false end
+    local home = hrp.CFrame            -- remember where we were; go back at the end
     local skip, built = {}, false
     for btn, t in pairs(buildCD) do
         if btn.Parent == nil or tick() >= t then buildCD[btn] = nil else skip[btn] = true end
     end
-    setNoclip(char, true)
     for _ = 1, 60 do
         if not alive() then break end
         local pick = pickBuild(base, skip)
         if not pick then break end
         local _, h = getChar()
         if not h then break end
-        local anchorPos = pick.anchor.Position   -- aim at the part CENTER, fly through it
-        local fire = function()
+        -- stand a few studs to the side & above the trigger, NOT on top of it
+        h.CFrame = CFrame.new(pick.anchor.Position + Vector3.new(4, 2, 4))
+        pcall(function() h.AssemblyLinearVelocity = Vector3.zero end)
+        task.wait(0.06)
+        local bought = false
+        for _ = 1, 6 do
+            local _, hh = getChar()
+            if not hh then break end
             for _,p in ipairs(pick.parts) do
-                pcall(firetouchinterest, h, p, 0)
-                pcall(firetouchinterest, h, p, 1)
+                pcall(firetouchinterest, hh, p, 0)
+                pcall(firetouchinterest, hh, p, 1)
             end
-        end
-        local isBought = function() return pick.btn.Parent == nil end
-        local bought = flyThrough(h, anchorPos, fire, isBought)
-        if not bought then           -- one more short pass in case we blew past it
-            for _ = 1, 4 do
-                fire()
-                if isBought() then bought = true break end
-                RunService.Heartbeat:Wait()
-            end
+            if pick.btn.Parent == nil then bought = true break end
+            task.wait(0.04)
         end
         if bought then
             built = true
@@ -194,8 +172,11 @@ local function doBuild(base)
             buildCD[pick.btn] = tick() + BUILD_FAIL_CD
         end
     end
-    local c2 = plr.Character
-    if c2 then setNoclip(c2, false) end   -- re-enable collision so we don't fall through
+    local _, h2 = getChar()
+    if h2 then                          -- never leave the player parked inside a button
+        h2.CFrame = home
+        pcall(function() h2.AssemblyLinearVelocity = Vector3.zero end)
+    end
     return built
 end
 
