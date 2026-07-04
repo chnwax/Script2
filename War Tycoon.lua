@@ -1,13 +1,6 @@
---// ============================================================
---// [BROKEN / ABANDONED] War Tycoon Auto
---// DOES NOT WORK. Auto Build bugs the character: buttons get
---// teleported into the player and fling the character upward.
---// Server-side proximity purchase means teleport is required and
---// leaves the char parked inside collidable button parts. Left
---// here for reference only. Do not use.
---// ============================================================
---// War Tycoon Auto (Auto Build money plates + Auto Collect cash)
---// Draggable UI. RightShift = master Start/Stop. Toggles for Build & Collect.
+--// War Tycoon Auto (Collect cash/oil, Airdrop, Capture, Rebirth)
+--// Auto Build removed — server-side proximity purchase bugged the character.
+--// Draggable UI. RightShift = hide/show. Each toggle runs on its own.
 --// Teleport-based: saves your position, does action, restores. Best used AFK.
 
 --==================== session guard ====================
@@ -46,12 +39,6 @@ local function getCash()
     return c and c.Value or 0
 end
 
-local function getRebirths()
-    local ls = plr:FindFirstChild("leaderstats")
-    local r  = ls and ls:FindFirstChild("Rebirths")
-    return r and r.Value or 0
-end
-
 -- teleport hrp to pos, run fn, restore original CFrame
 local function atPos(pos, fn)
     local _, hrp = getChar()
@@ -64,120 +51,6 @@ local function atPos(pos, fn)
     local _, hrp2 = getChar()
     if hrp2 then hrp2.CFrame = save end
     return ok
-end
-
---==================== AUTO BUILD ====================
--- buildable Cash button = ButtonType "Cash", affordable, deps satisfied.
--- priority: names/objects containing "Oil" (money producers) first, then cheapest.
-local function depOk(base, btn)
-    local dep = btn:GetAttribute("Dependencies")
-    if not dep or dep == "" then return true end
-    local po = base:FindFirstChild("PurchasedObjects")
-    return po ~= nil and po:FindFirstChild(dep) ~= nil
-end
-
--- touch triggers on a button = every BasePart that can be touched
--- (the "Gradient" part carries the TouchTransmitter; fire all touchables to be safe)
-local function triggerParts(btn)
-    local out, anchor = {}, nil
-    for _,d in ipairs(btn:GetDescendants()) do
-        if d:IsA("BasePart") and d.CanTouch then
-            out[#out+1] = d
-            if d.Name == "Gradient" then anchor = d end
-        end
-    end
-    return out, anchor or out[1]
-end
-
--- buildable = Cash button we can afford, OR Rebirth-gated free unlock
--- (ButtonType "Rebirth", Price 0, RebirthRequirement <= our rebirths).
-local function buyable(base, btn, cash, rebirths)
-    local bt = btn:GetAttribute("ButtonType")
-    if bt == "Cash" then
-        local price = btn:GetAttribute("Price") or 0
-        return price <= cash and depOk(base, btn), price
-    elseif bt == "Rebirth" then
-        local req = tonumber(btn:GetAttribute("RebirthRequirement")) or 0
-        return rebirths >= req and depOk(base, btn), 0
-    end
-    return false
-end
-
-local function pickBuild(base, skip)
-    local ub = base:FindFirstChild("UnpurchasedButtons")
-    if not ub then return end
-    local cash, rebirths = getCash(), getRebirths()
-    local best, bestScore
-    for _,btn in ipairs(ub:GetChildren()) do
-        if not (skip and skip[btn]) then
-            local ok, price = buyable(base, btn, cash, rebirths)
-            if ok then
-                local parts, anchor = triggerParts(btn)
-                if anchor then
-                    local nm = (btn.Name .. " " .. tostring(btn:GetAttribute("Objects"))):lower()
-                    local isMoney = nm:find("oil") ~= nil
-                    -- score: money producers rank first, then cheaper
-                    local score = (isMoney and 0 or 1e9) + price
-                    if not bestScore or score < bestScore then
-                        bestScore, best = score, {btn = btn, parts = parts, anchor = anchor, price = price}
-                    end
-                end
-            end
-        end
-    end
-    return best
-end
-
--- buttons that pass the filter but refuse to purchase (server rejects) go on a
--- cooldown so we don't fly to the SAME button over and over each pass.
-local buildCD = {}
-local BUILD_FAIL_CD = 15
-
--- Teleport BESIDE each button (never into it), fire the touch from ~5 studs
--- (server proximity is satisfied without overlapping the collidable part, so we
--- don't get ejected and never end up stuck inside a button). Return home after.
-local function doBuild(base)
-    local char, hrp = getChar()
-    if not char or not hrp then return false end
-    local home = hrp.CFrame            -- remember where we were; go back at the end
-    local skip, built = {}, false
-    for btn, t in pairs(buildCD) do
-        if btn.Parent == nil or tick() >= t then buildCD[btn] = nil else skip[btn] = true end
-    end
-    for _ = 1, 60 do
-        if not alive() then break end
-        local pick = pickBuild(base, skip)
-        if not pick then break end
-        local _, h = getChar()
-        if not h then break end
-        -- stand a few studs to the side & above the trigger, NOT on top of it
-        h.CFrame = CFrame.new(pick.anchor.Position + Vector3.new(4, 2, 4))
-        pcall(function() h.AssemblyLinearVelocity = Vector3.zero end)
-        task.wait(0.06)
-        local bought = false
-        for _ = 1, 6 do
-            local _, hh = getChar()
-            if not hh then break end
-            for _,p in ipairs(pick.parts) do
-                pcall(firetouchinterest, hh, p, 0)
-                pcall(firetouchinterest, hh, p, 1)
-            end
-            if pick.btn.Parent == nil then bought = true break end
-            task.wait(0.04)
-        end
-        if bought then
-            built = true
-        else
-            skip[pick.btn] = true
-            buildCD[pick.btn] = tick() + BUILD_FAIL_CD
-        end
-    end
-    local _, h2 = getChar()
-    if h2 then                          -- never leave the player parked inside a button
-        h2.CFrame = home
-        pcall(function() h2.AssemblyLinearVelocity = Vector3.zero end)
-    end
-    return built
 end
 
 --==================== AUTO COLLECT ====================
@@ -379,7 +252,7 @@ end
 
 --==================== AUTO REBIRTH ====================
 -- first rebirth FREE (Rebirths==0), after that costs 500k cash.
--- rebirth WIPES the base (auto-build then rebuilds). off by default.
+-- rebirth WIPES the base (you rebuild manually — no auto build). off by default.
 local REBIRTH_COST = 500000
 local lastRebirth = 0
 local function doRebirth(base)
@@ -413,7 +286,7 @@ end
 --==================== STATE + MAIN LOOP ====================
 -- No master start/stop: each toggle runs on its own, no intervals/limits.
 -- ONLY auto capture keeps limits (3-min cooldown if killed on the point).
-local State = { build = true, collectOil = true, collectCash = true,
+local State = { collectOil = true, collectCash = true,
                 airdrop = false, capture = false, rebirth = false, busy = false,
                 capturingNow = false, status = "idle" }
 
@@ -454,7 +327,6 @@ task.spawn(function()
                     local did = {}
                     if State.collectCash and doCollectCash(base) then did[#did+1] = "cash" end
                     if State.collectOil  and doCollectOil(base)  then did[#did+1] = "oil"  end
-                    if State.build       and doBuild(base)       then did[#did+1] = "build" end
                     State.status = (#did > 0) and table.concat(did, "+") or "idle"
                 end
                 State.busy = false
@@ -486,7 +358,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(220, 250)
+main.Size = UDim2.fromOffset(220, 216)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -576,15 +448,14 @@ local function makeToggle(y, label, initial, onChange)
     return holder
 end
 
-makeToggle(40,  "Auto Build",    State.build,       function(v) State.build = v end)
-makeToggle(74,  "Collect Oil",   State.collectOil,  function(v) State.collectOil = v end)
-makeToggle(108, "Collect Cash",  State.collectCash, function(v) State.collectCash = v end)
-makeToggle(142, "Auto Capture",  State.capture,     function(v) State.capture = v end)
-makeToggle(176, "Auto Rebirth",  State.rebirth,     function(v) State.rebirth = v end)
+makeToggle(40,  "Collect Oil",   State.collectOil,  function(v) State.collectOil = v end)
+makeToggle(74,  "Collect Cash",  State.collectCash, function(v) State.collectCash = v end)
+makeToggle(108, "Auto Capture",  State.capture,     function(v) State.capture = v end)
+makeToggle(142, "Auto Rebirth",  State.rebirth,     function(v) State.rebirth = v end)
 
 local status = Instance.new("TextLabel")
 status.Size = UDim2.new(1, -20, 0, 24)
-status.Position = UDim2.fromOffset(10, 214)
+status.Position = UDim2.fromOffset(10, 180)
 status.BackgroundTransparency = 1
 status.Text = "running  •  [RShift hide]"
 status.TextColor3 = Color3.fromRGB(160, 155, 175)
