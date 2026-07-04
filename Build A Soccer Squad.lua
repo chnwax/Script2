@@ -236,6 +236,39 @@ do
     end
 end
 
+-- merge SPECIAL cards (variants like "GB Messi" 109, "Vinicius" 102) into the
+-- teams. They live in SpecialCards.Specials[year][country][baseName] with a
+-- boosted ovr + variantName; position comes from the base player.
+pcall(function()
+    local SC = require(RS:WaitForChild("SpecialCards"))
+    for _, e in ipairs(SC.Each()) do
+        local byYear = teamsCY[e.country]
+        local team = byYear and byYear[e.year]
+        if team then
+            local pos
+            for _, p in ipairs(team) do
+                if p.name == e.baseName then pos = p.pos; break end
+            end
+            local d = e.def or {}
+            team[#team + 1] = {
+                name    = d.variantName or e.baseName,
+                pos     = pos or (d.pos) or "?",
+                ovr     = d.ovr or 0,
+                special = true,
+            }
+        end
+    end
+    -- re-sort every team list now that specials were appended
+    for _, byYear in pairs(teamsCY) do
+        for _, l in pairs(byYear) do
+            table.sort(l, function(a, b)
+                if a.ovr == b.ovr then return a.name < b.name end
+                return a.ovr > b.ovr
+            end)
+        end
+    end
+end)
+
 -- Polish country names (display only; teamsCY keys stay English)
 local PL = {
     Argentina = "Argentyna", Belgium = "Belgia", Brazil = "Brazylia",
@@ -523,7 +556,8 @@ local function renderTeam()
             row.TextSize = 13
             row.TextXAlignment = Enum.TextXAlignment.Left
             row.TextColor3 = ovrColor(p.ovr)
-            row.Text = string.format("%2d  %-3s  %s", p.ovr, tostring(p.pos), tostring(p.name))
+            row.Text = string.format("%2d  %-3s  %s%s", p.ovr, tostring(p.pos),
+                p.special and "* " or "", tostring(p.name))
             row.LayoutOrder = n
             row.Parent = cardScroll
         end
@@ -705,11 +739,11 @@ local function renderBrowse()
     local rows = {}
     if selectedYear then
         local l = teamsCY[brCountry][selectedYear]
-        if l then for _, p in ipairs(l) do rows[#rows + 1] = { ovr = p.ovr, pos = p.pos, name = p.name, year = selectedYear } end end
+        if l then for _, p in ipairs(l) do rows[#rows + 1] = { ovr = p.ovr, pos = p.pos, name = p.name, year = selectedYear, special = p.special } end end
     else
         for _, y in ipairs(yearList) do
             local l = teamsCY[brCountry][y]
-            if l then for _, p in ipairs(l) do rows[#rows + 1] = { ovr = p.ovr, pos = p.pos, name = p.name, year = y } end end
+            if l then for _, p in ipairs(l) do rows[#rows + 1] = { ovr = p.ovr, pos = p.pos, name = p.name, year = y, special = p.special } end end
         end
     end
     table.sort(rows, function(a, b)
@@ -726,8 +760,8 @@ local function renderBrowse()
         row.TextSize = 12
         row.TextXAlignment = Enum.TextXAlignment.Left
         row.TextColor3 = ovrColor(p.ovr)
-        row.Text = string.format("%2d  %-3s  %s  '%s", p.ovr, tostring(p.pos),
-            tostring(p.name), string.sub(tostring(p.year), -2))
+        row.Text = string.format("%2d  %-3s  %s%s  '%s", p.ovr, tostring(p.pos),
+            p.special and "* " or "", tostring(p.name), string.sub(tostring(p.year), -2))
         row.LayoutOrder = i
         row.Parent = brCardScroll
     end
@@ -754,7 +788,7 @@ do  -- build year chips once: "Wsz" + each year
         Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
         yearChips[key] = b
         b.MouseButton1Click:Connect(function()
-            selectedYear = (key == "ALL") and nil or key
+            if key == "ALL" then selectedYear = nil else selectedYear = key end
             refreshChips(); renderBrowse()
         end)
     end
