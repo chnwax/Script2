@@ -206,6 +206,23 @@ task.spawn(function()
     end
 end)
 
+--==================== anti-AFK ====================
+-- Roblox kicks idle players (~20 min). On the Idled signal, poke the
+-- VirtualUser so the server sees activity. Guarded + de-duped across re-exec.
+do
+    local ok, VirtualUser = pcall(game.GetService, game, "VirtualUser")
+    if ok and VirtualUser then
+        if getgenv().__ssAntiAfk then
+            pcall(function() getgenv().__ssAntiAfk:Disconnect() end)
+        end
+        getgenv().__ssAntiAfk = plr.Idled:Connect(function()
+            if not alive() then return end
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end
+end
+
 --==================== card catalog (per country) ====================
 -- WorldCupData.Teams[year][country] = { players = { {name,pos,ovr,...}, ... }, ... }
 -- Build catalog[country] = every card obtainable for that country (merged across
