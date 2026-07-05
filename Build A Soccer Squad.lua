@@ -435,6 +435,24 @@ local Lighting  = game:GetService("Lighting")
 local Terrain   = workspace:FindFirstChildOfClass("Terrain")
 local fpsConn   = nil     -- workspace.DescendantAdded
 local guiConn   = nil     -- PlayerGui.DescendantAdded
+local playerConns = {}    -- PlayerAdded + per-player CharacterAdded
+
+-- hide/show OTHER players' characters (client-only, fully reversible).
+local function setCharHidden(char, hidden)
+    if not char then return end
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("BasePart") or d:IsA("Decal") then
+            pcall(function() d.LocalTransparencyModifier = hidden and 1 or 0 end)
+        end
+    end
+end
+local function hideOther(other)
+    if other == plr then return end
+    setCharHidden(other.Character, true)
+    playerConns[#playerConns + 1] = other.CharacterAdded:Connect(function(char)
+        if State.fps then task.wait(0.2); setCharHidden(char, true) end
+    end)
+end
 -- restore maps: images + viewports get RESTORED on toggle-off (they are GUI, so
 -- blanking is reversible); decals/textures/materials on world models stay stripped.
 local origImage = setmetatable({}, { __mode = "k" })   -- ImageLabel/Button -> original Image
@@ -497,9 +515,21 @@ local function setFps(on)
                 if State.fps then task.defer(stripPhoto, inst) end
             end)
         end
+        -- hide other players + catch late joiners
+        for _, c in ipairs(playerConns) do pcall(function() c:Disconnect() end) end
+        playerConns = {}
+        for _, other in ipairs(Players:GetPlayers()) do hideOther(other) end
+        playerConns[#playerConns + 1] = Players.PlayerAdded:Connect(function(other)
+            if State.fps then hideOther(other) end
+        end)
     else
         if fpsConn then fpsConn:Disconnect(); fpsConn = nil end
         if guiConn then guiConn:Disconnect(); guiConn = nil end
+        for _, c in ipairs(playerConns) do pcall(function() c:Disconnect() end) end
+        playerConns = {}
+        for _, other in ipairs(Players:GetPlayers()) do
+            if other ~= plr then setCharHidden(other.Character, false) end
+        end
         Lighting.GlobalShadows = true
         pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic end)
         -- restore blanked photos (GUI only)
