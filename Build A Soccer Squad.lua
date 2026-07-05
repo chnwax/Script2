@@ -107,7 +107,7 @@ local function waitAny(map, timeout)
 end
 
 --==================== state ====================
-local State = { on = false, status = "off", lastPick = "-" }
+local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0 }
 getgenv().SSAuto = State   -- external control/inspection: getgenv().SSAuto.on = true
 
 local ALL_OPEN = { GK = true, DEF = true, MID = true, FWD = true }
@@ -346,6 +346,174 @@ local function ovrColor(o)
     return Color3.fromRGB(165, 174, 170)
 end
 
+--==================== currency + player-shop (auto-buy) ====================
+-- coins live in Remotes.RequestCoins (RF) with live pushes via CoinsUpdate (RE).
+-- the player shop is Remotes.RequestPrimeShop (RF) -> { featured = {{baseName,year,country}x4}, ... }.
+-- price of a featured card = SpecialCards.GetForBase(year,country,baseName).coinPrice.
+-- ownership set = Remotes.RequestUnlockedSpecials (RF) keyed "year:country:baseName"=true.
+-- buy = Remotes.PurchasePlayerUnlock:InvokeServer(year,country,baseName) -> truthy on success.
+local RequestCoins           = Remotes:FindFirstChild("RequestCoins")
+local CoinsUpdate            = Remotes:FindFirstChild("CoinsUpdate")
+local RequestPrimeShop       = Remotes:FindFirstChild("RequestPrimeShop")
+local RequestUnlockedSpecials= Remotes:FindFirstChild("RequestUnlockedSpecials")
+local PurchasePlayerUnlock   = Remotes:FindFirstChild("PurchasePlayerUnlock")
+local SCmod = nil
+pcall(function() SCmod = require(RS:WaitForChild("SpecialCards")) end)
+
+local function fetchCoins()
+    if not RequestCoins then return State.coins end
+    local ok, n = pcall(function() return RequestCoins:InvokeServer() end)
+    if ok and type(n) == "number" then State.coins = n end
+    return State.coins
+end
+
+local function priceOf(year, country, baseName)
+    if not SCmod then return nil end
+    local ok, def = pcall(function() return SCmod.GetForBase(year, country, baseName) end)
+    if ok and type(def) == "table" then return def.coinPrice end
+    return nil
+end
+
+-- initial coins + live updates
+task.spawn(fetchCoins)
+if CoinsUpdate then
+    CoinsUpdate.OnClientEvent:Connect(function(n)
+        if type(n) == "number" then State.coins = n end
+    end)
+end
+
+-- auto-buy loop: while enabled, poll the shop and unlock any affordable,
+-- not-yet-owned featured card (cheapest first so we don't blow coins on one card).
+task.spawn(function()
+    while alive() do
+        if State.autoBuy and RequestPrimeShop and PurchasePlayerUnlock then
+            local ok, shop = pcall(function() return RequestPrimeShop:InvokeServer() end)
+            local owned = {}
+            if RequestUnlockedSpecials then
+                pcall(function()
+                    local s = RequestUnlockedSpecials:InvokeServer()
+                    if type(s) == "table" then owned = s end
+                end)
+            end
+            if ok and type(shop) == "table" and type(shop.featured) == "table" then
+                fetchCoins()
+                local buyable = {}
+                for _, f in ipairs(shop.featured) do
+                    if type(f) == "table" and f.baseName and f.year and f.country then
+                        local key = tostring(f.year) .. ":" .. f.country .. ":" .. f.baseName
+                        local price = priceOf(f.year, f.country, f.baseName)
+                        if not owned[key] and price and price <= State.coins then
+                            buyable[#buyable + 1] = { f = f, price = price }
+                        end
+                    end
+                end
+                table.sort(buyable, function(a, b) return a.price < b.price end)
+                for _, b in ipairs(buyable) do
+                    if not (alive() and State.autoBuy) then break end
+                    if b.price <= State.coins then
+                        local f = b.f
+                        local okp = pcall(function()
+                            return PurchasePlayerUnlock:InvokeServer(f.year, f.country, f.baseName)
+                        end)
+                        if okp then
+                            State.coins = State.coins - b.price
+                            State.lastBuy = string.format("%s (%d)", f.baseName, b.price)
+                        end
+                        task.wait(0.4)
+                    end
+                end
+            end
+            task.wait(2)
+        else
+            task.wait(0.5)
+        end
+    end
+end)
+
+--==================== FPS mode (strip textures / cheap graphics) ====================
+local Lighting  = game:GetService("Lighting")
+local Terrain   = workspace:FindFirstChildOfClass("Terrain")
+local fpsConn   = nil     -- workspace.DescendantAdded
+local guiConn   = nil     -- PlayerGui.DescendantAdded
+-- restore maps: images + viewports get RESTORED on toggle-off (they are GUI, so
+-- blanking is reversible); decals/textures/materials on world models stay stripped.
+local origImage = setmetatable({}, { __mode = "k" })   -- ImageLabel/Button -> original Image
+local origVpVis = setmetatable({}, { __mode = "k" })   -- ViewportFrame     -> original Visible
+local function stripPhoto(inst)
+    -- player "photos": card portraits (ImageLabel/Button) + 3D card previews (ViewportFrame)
+    if inst:IsA("ImageLabel") or inst:IsA("ImageButton") then
+        if inst.Image ~= "" then
+            if origImage[inst] == nil then origImage[inst] = inst.Image end
+            inst.Image = ""
+        end
+    elseif inst:IsA("ViewportFrame") then
+        if origVpVis[inst] == nil then origVpVis[inst] = inst.Visible end
+        inst.Visible = false
+    end
+end
+local function applyFpsToInstance(inst)
+    if inst:IsA("BasePart") then
+        inst.Material = Enum.Material.SmoothPlastic
+        inst.Reflectance = 0
+        pcall(function() inst.CastShadow = false end)
+    elseif inst:IsA("Decal") or inst:IsA("Texture") then
+        inst.Transparency = 1
+    elseif inst:IsA("SpecialMesh") then
+        pcall(function() inst.TextureId = "" end)
+    elseif inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Smoke")
+        or inst:IsA("Fire") or inst:IsA("Sparkles") or inst:IsA("Beam") then
+        inst.Enabled = false
+    elseif inst:IsA("SurfaceAppearance") then
+        pcall(function() inst:Destroy() end)
+    end
+    stripPhoto(inst)
+end
+local function setFps(on)
+    State.fps = on
+    local pg = plr:FindFirstChildOfClass("PlayerGui")
+    if on then
+        pcall(function() sethiddenproperty(Lighting, "Technology", 0) end)
+        pcall(function() settings().Rendering.QualityLevel = 1 end)
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 1e9
+        pcall(function() Lighting.EnvironmentDiffuseScale = 0; Lighting.EnvironmentSpecularScale = 0 end)
+        for _, e in ipairs(Lighting:GetChildren()) do
+            if e:IsA("BloomEffect") or e:IsA("SunRaysEffect") or e:IsA("DepthOfFieldEffect")
+                or e:IsA("BlurEffect") then e.Enabled = false end
+        end
+        if Terrain then pcall(function() Terrain.WaterWaveSize = 0; Terrain.WaterWaveSpeed = 0; Terrain.WaterReflectance = 0; Terrain.WaterTransparency = 1 end) end
+        for _, inst in ipairs(workspace:GetDescendants()) do applyFpsToInstance(inst) end
+        -- strip player photos in the game GUI (skip our own SSAuto UI)
+        if pg then
+            for _, inst in ipairs(pg:GetDescendants()) do stripPhoto(inst) end
+        end
+        if fpsConn then fpsConn:Disconnect() end
+        fpsConn = workspace.DescendantAdded:Connect(function(inst)
+            if State.fps then task.defer(applyFpsToInstance, inst) end
+        end)
+        if guiConn then guiConn:Disconnect() end
+        if pg then
+            guiConn = pg.DescendantAdded:Connect(function(inst)
+                if State.fps then task.defer(stripPhoto, inst) end
+            end)
+        end
+    else
+        if fpsConn then fpsConn:Disconnect(); fpsConn = nil end
+        if guiConn then guiConn:Disconnect(); guiConn = nil end
+        Lighting.GlobalShadows = true
+        pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic end)
+        -- restore blanked photos (GUI only)
+        for inst, img in pairs(origImage) do
+            if typeof(inst) == "Instance" then pcall(function() inst.Image = img end) end
+        end
+        for inst, vis in pairs(origVpVis) do
+            if typeof(inst) == "Instance" then pcall(function() inst.Visible = vis end) end
+        end
+        origImage = setmetatable({}, { __mode = "k" })
+        origVpVis = setmetatable({}, { __mode = "k" })
+    end
+end
+
 --==================== UI ====================
 local gethui = gethui or function() return game:GetService("CoreGui") end
 local parent = gethui()
@@ -363,7 +531,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(230, 184)
+main.Size = UDim2.fromOffset(230, 262)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -401,49 +569,78 @@ do
     end)
 end
 
-local holder = Instance.new("Frame")
-holder.Size = UDim2.new(1, -20, 0, 32)
-holder.Position = UDim2.fromOffset(10, 38)
-holder.BackgroundColor3 = BG2
-holder.BorderSizePixel = 0
-holder.Parent = main
-Instance.new("UICorner", holder).CornerRadius = UDim.new(0, 8)
+-- coins / cash label
+local coinsLbl = Instance.new("TextLabel")
+coinsLbl.Size = UDim2.new(1, -20, 0, 20)
+coinsLbl.Position = UDim2.fromOffset(10, 32)
+coinsLbl.BackgroundTransparency = 1
+coinsLbl.Text = "Kasa: ..."
+coinsLbl.TextColor3 = Color3.fromRGB(255, 205, 90)
+coinsLbl.TextXAlignment = Enum.TextXAlignment.Left
+coinsLbl.Font = Enum.Font.GothamBold
+coinsLbl.TextSize = 14
+coinsLbl.Parent = main
 
-local lbl = Instance.new("TextLabel")
-lbl.Size = UDim2.new(1, -50, 1, 0)
-lbl.Position = UDim2.fromOffset(10, 0)
-lbl.BackgroundTransparency = 1
-lbl.Text = "Auto Roll"
-lbl.TextColor3 = Color3.fromRGB(225, 232, 228)
-lbl.TextXAlignment = Enum.TextXAlignment.Left
-lbl.Font = Enum.Font.Gotham
-lbl.TextSize = 13
-lbl.Parent = holder
+-- toggle-row factory: builds a labeled switch at offset y; returns a setter
+-- that updates the visual state. onChange(newValue) fires on click.
+local function makeToggle(y, text, getVal, onChange)
+    local holder = Instance.new("Frame")
+    holder.Size = UDim2.new(1, -20, 0, 30)
+    holder.Position = UDim2.fromOffset(10, y)
+    holder.BackgroundColor3 = BG2
+    holder.BorderSizePixel = 0
+    holder.Parent = main
+    Instance.new("UICorner", holder).CornerRadius = UDim.new(0, 8)
 
-local sw = Instance.new("TextButton")
-sw.Size = UDim2.fromOffset(34, 18)
-sw.Position = UDim2.new(1, -42, 0.5, -9)
-sw.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
-sw.Text = ""; sw.AutoButtonColor = false
-sw.Parent = holder
-Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
-local knob = Instance.new("Frame")
-knob.Size = UDim2.fromOffset(14, 14)
-knob.Position = UDim2.fromOffset(2, 2)
-knob.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
-knob.BorderSizePixel = 0
-knob.Parent = sw
-Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -50, 1, 0)
+    lbl.Position = UDim2.fromOffset(10, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = text
+    lbl.TextColor3 = Color3.fromRGB(225, 232, 228)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 13
+    lbl.Parent = holder
 
-sw.MouseButton1Click:Connect(function()
-    State.on = not State.on
-    sw.BackgroundColor3 = State.on and ACCENT or Color3.fromRGB(70, 76, 72)
-    knob.Position = State.on and UDim2.fromOffset(18, 2) or UDim2.fromOffset(2, 2)
-end)
+    local sw = Instance.new("TextButton")
+    sw.Size = UDim2.fromOffset(34, 18)
+    sw.Position = UDim2.new(1, -42, 0.5, -9)
+    sw.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
+    sw.Text = ""; sw.AutoButtonColor = false
+    sw.Parent = holder
+    Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.fromOffset(14, 14)
+    knob.Position = UDim2.fromOffset(2, 2)
+    knob.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
+    knob.BorderSizePixel = 0
+    knob.Parent = sw
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+    local function paint()
+        local v = getVal()
+        sw.BackgroundColor3 = v and ACCENT or Color3.fromRGB(70, 76, 72)
+        knob.Position = v and UDim2.fromOffset(18, 2) or UDim2.fromOffset(2, 2)
+    end
+    sw.MouseButton1Click:Connect(function()
+        onChange(not getVal())
+        paint()
+    end)
+    paint()
+    return paint
+end
+
+makeToggle(56, "Auto Roll", function() return State.on end,
+    function(v) State.on = v end)
+makeToggle(90, "Auto Buy (sklep)", function() return State.autoBuy end,
+    function(v) State.autoBuy = v end)
+makeToggle(124, "FPS Mode", function() return State.fps end,
+    function(v) setFps(v) end)
 
 local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, -20, 0, 40)
-status.Position = UDim2.fromOffset(10, 76)
+status.Size = UDim2.new(1, -20, 0, 34)
+status.Position = UDim2.fromOffset(10, 160)
 status.BackgroundTransparency = 1
 status.Text = "off  •  [RShift hide]"
 status.TextColor3 = Color3.fromRGB(150, 165, 155)
@@ -474,7 +671,7 @@ end
 
 local catBtn = Instance.new("TextButton")
 catBtn.Size = UDim2.new(1, -20, 0, 26)
-catBtn.Position = UDim2.fromOffset(10, 120)
+catBtn.Position = UDim2.fromOffset(10, 200)
 catBtn.BackgroundColor3 = BG2
 catBtn.Text = "Karty (losowana druzyna)"
 catBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
@@ -634,7 +831,7 @@ end)
 --==================== browse-all panel (all cards, filter by year) ====================
 local browseBtn = Instance.new("TextButton")
 browseBtn.Size = UDim2.new(1, -20, 0, 26)
-browseBtn.Position = UDim2.fromOffset(10, 150)
+browseBtn.Position = UDim2.fromOffset(10, 230)
 browseBtn.BackgroundColor3 = BG2
 browseBtn.Text = "Wszystkie karty"
 browseBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
@@ -883,7 +1080,9 @@ end)
 
 task.spawn(function()
     while alive() do
-        status.Text = string.format("%s\nlast: %s", State.status, State.lastPick)
+        coinsLbl.Text = "Kasa: " .. tostring(State.coins)
+        local extra = State.autoBuy and State.lastBuy and ("\nkup: " .. State.lastBuy) or ""
+        status.Text = string.format("%s\nlast: %s%s", State.status, State.lastPick, extra)
         task.wait(0.3)
     end
 end)
