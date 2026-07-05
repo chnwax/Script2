@@ -107,8 +107,10 @@ local function waitAny(map, timeout)
 end
 
 --==================== state ====================
-local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0, reQuest = false, persist = false }
+local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0, reQuest = false, persist = false, hunt = false, huntTarget = 103 }
 getgenv().SSAuto = State   -- external control/inspection: getgenv().SSAuto.on = true
+local paintHunt            -- forward decl: hunt-toggle repaint (assigned in UI section)
+local paintRoll            -- forward decl: auto-roll-toggle repaint (assigned in UI section)
 
 local ALL_OPEN = { GK = true, DEF = true, MID = true, FWD = true }
 
@@ -133,7 +135,7 @@ task.spawn(function()
     local needSeed = true
     while alive() do
         if not State.on then
-            State.status = "off"
+            if not State.hunt then State.status = "off" end  -- hunt loop owns status while active
             needSeed = true          -- resync open slots next time we turn on
             task.wait(0.3)
         else
@@ -248,19 +250,279 @@ do
     end
 end
 
+--==================== HUNT mode (reroll until OVR >= target) ====================
+-- Separate from the fill loop. While State.hunt: RollRequest -> look at the best
+-- OVR in the reveal -> if >= huntTarget (default 103, the special-card range) STOP
+-- and leave that roll on screen for the user to pick; otherwise RestartRun (fresh
+-- random team) and roll again, forever until a 103+ shows. Rolling and hunting are
+-- mutually exclusive: turning hunt on forces the fill loop (State.on) off.
+task.spawn(function()
+    local n = 0
+    while alive() do
+        if State.hunt then
+            if State.on then State.on = false; pcall(paintRoll) end
+            RollRequest:FireServer()
+            local ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.2)
+            if not ev then
+                Remotes.RequestState:FireServer()
+                ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.2)
+            end
+            if not alive() then break end
+            if ev == "roll" and type(payload) == "table" and type(payload.reveals) == "table" then
+                local mx, best = 0, nil
+                for _, v in pairs(payload.reveals) do
+                    if type(v) == "table" and type(v.ovr) == "number" and v.ovr > mx then
+                        mx, best = v.ovr, v
+                    end
+                end
+                if mx >= State.huntTarget then
+                    State.hunt = false
+                    pcall(paintHunt)
+                    State.status = string.format("ZNALEZIONE %d %s  (%s %s)", mx,
+                        tostring(best and best.name or "?"),
+                        tostring(payload.country), tostring(payload.year))
+                else
+                    -- MAX SPEED: fire RestartRun directly (bypass doRestart's 0.5s
+                    -- debounce) and roll again immediately with NO wait. Server keeps
+                    -- up at ~0.2s/cycle (RTT-bound). Refresh status only every 5th
+                    -- cycle to avoid label spam.
+                    RestartRun:FireServer()
+                    n = n + 1
+                    if n % 5 == 0 then State.status = string.format("poluje %d+  (%d roli)", State.huntTarget, n) end
+                end
+            elseif ev == "done" then
+                RestartRun:FireServer()
+            else
+                task.wait(0.25)
+            end
+        else
+            n = 0
+            task.wait(0.2)
+        end
+    end
+end)
+
 --==================== card catalog (per country) ====================
 -- WorldCupData.Teams[year][country] = { players = { {name,pos,ovr,...}, ... }, ... }
 -- Build catalog[country] = every card obtainable for that country (merged across
 -- all years), sorted by OVR desc. This is the roll pool the game draws from, so
 -- it answers "which cards can I roll from this country?".
-local WorldCupData = require(RS:WaitForChild("WorldCupData"))
+-- CRITICAL: do NOT touch game ModuleScripts from this script — not require(),
+-- not getscriptclosure(), not getscriptfunction(). ANY of them, run from the
+-- executor thread (RobloxScript context), globally poisons the engine's require
+-- path in this game: afterwards the game's OWN lazy Screen requires (UIController
+-- -> require(Screens.Shop/Collection/BestTeam/...)) fail with
+--   "Cannot require a RobloxScript module from a non RobloxScript context"
+-- which kills every in-game nav button except the screens already loaded before
+-- we ran (Codes / Join Cup). Confirmed: getscriptclosure taints identically to
+-- require. Root cause of "przyciski nie działają".
+--
+-- Fix: embed a snapshot of the pure-data modules (WorldCupData + SpecialCards)
+-- directly in this script (WCD / SPEC tables below) and reconstruct the shapes
+-- the rest of the code expects. Zero module access -> the game's require path is
+-- never touched -> nav buttons keep working. Snapshot source: sscards.txt.
+local WCD = {
+  [1970] = {
+    ["Brazil"]={"Pele^FWD^99","C. Alberto^DEF^94","Jairzinho^FWD^93","Rivellino^MID^92","Tostao^FWD^92","Gerson^MID^91","Clodoaldo^MID^87","Felix^GK^85","Brito^DEF^84","Piazza^DEF^84","Everaldo^DEF^82"},
+  },
+  [1974] = {
+    ["Germany"]={"Beckenbauer^DEF^98","G. Muller^FWD^97","Maier^GK^91","Breitner^DEF^90","Overath^MID^89","Vogts^DEF^88","Bonhof^MID^87","Hoeness^MID^86","Grabowski^FWD^85","Holzenbein^FWD^85","Schwarzenbeck^DEF^84"},
+    ["Netherlands"]={"Cruyff^FWD^98","Neeskens^MID^92","Krol^DEF^90","Rensenbrink^FWD^89","Van Hanegem^MID^89","Haan^DEF^88","Rep^FWD^88","Jongbloed^GK^85","Jansen^MID^84","Suurbier^DEF^84","Rijsbergen^DEF^83"},
+  },
+  [1986] = {
+    ["Argentina"]={"Maradona^MID^99","Valdano^FWD^90","Brown^DEF^88","Burruchaga^FWD^87","Ruggeri^DEF^86","Batista^MID^84","Giusti^MID^84","Olarticoechea^DEF^84","Pumpido^GK^84","Pasculli^FWD^83","Cuciuffo^DEF^82"},
+  },
+  [1994] = {
+    ["Brazil"]={"Romario^FWD^97","Bebeto^FWD^91","Aldair^DEF^89","Dunga^MID^89","Taffarel^GK^89","Cafu^DEF^88","Branco^DEF^87","Zinho^FWD^86","Mauro Silva^MID^85","M. Santos^DEF^83","Mazinho^MID^83"},
+    ["Italy"]={"R. Baggio^FWD^97","Baresi^DEF^93","Maldini^DEF^91","Albertini^MID^88","Donadoni^FWD^88","Pagliuca^GK^88","Costacurta^DEF^87","D. Baggio^MID^87","Massaro^FWD^84","Berti^MID^82","Mussi^DEF^82"},
+  },
+  [2002] = {
+    ["Argentina"]={"Batistuta^FWD^89","Crespo^FWD^88","Veron^MID^88","Zanetti^DEF^87","Aimar^MID^85","Ortega^FWD^85","Samuel^DEF^85","Simeone^MID^84","Sorin^DEF^84","Cavallero^GK^81","Placente^DEF^81"},
+    ["Brazil"]={"R9^FWD^99","Rivaldo^FWD^93","Ronaldinho^MID^91","R. Carlos^DEF^90","Cafu^DEF^89","Lucio^DEF^86","Marcos^GK^86","Gilberto S.^MID^84","Edmilson^DEF^83","Kleberson^MID^81","Luizao^FWD^81"},
+    ["England"]={"Beckham^MID^91","Owen^FWD^91","Scholes^MID^89","Ferdinand^DEF^87","Campbell^DEF^86","Seaman^GK^85","A. Cole^DEF^84","G. Neville^DEF^84","Heskey^FWD^82","Hargreaves^MID^81","Vassell^FWD^80"},
+    ["France"]={"Zidane^MID^96","Henry^FWD^93","Vieira^MID^91","Thuram^DEF^88","Desailly^DEF^87","Trezeguet^FWD^86","Barthez^GK^85","Lizarazu^DEF^85","Petit^MID^84","Wiltord^FWD^84","Leboeuf^DEF^82"},
+    ["Germany"]={"Kahn^GK^96","Ballack^MID^91","Klose^FWD^87","Hamann^MID^84","Frings^DEF^83","Schneider^MID^83","Ziege^DEF^82","Bode^FWD^81","Neuville^FWD^81","Ramelow^DEF^81","Linke^DEF^80"},
+    ["Italy"]={"Maldini^DEF^93","Cannavaro^DEF^92","Buffon^GK^91","Nesta^DEF^90","Totti^MID^90","Vieri^FWD^89","Del Piero^FWD^88","Inzaghi^FWD^86","Zambrotta^MID^84","Panucci^DEF^82","Tommasi^MID^81"},
+    ["Senegal"]={"El-H. Diouf^FWD^87","Fadiga^MID^84","H. Camara^FWD^84","P.B. Diop^MID^84","L. Diatta^DEF^82","S. Diao^MID^82","T. Sylva^GK^82","H. Beye^DEF^81","M. Niang^FWD^81","O. Daf^DEF^80","P. Diop^DEF^80"},
+    ["South Korea"]={"Ahn Jung-Hwan^FWD^87","Lee Woon-Jae^GK^85","Park Ji-Sung^MID^85","Hong Myung-Bo^DEF^84","Lee Young-Pyo^DEF^82","Seol Ki-Hyeon^FWD^82","Yoo Sang-Chul^MID^82","Hwang Sun-Hong^FWD^81","Choi Jin-Cheul^DEF^80","Kim Nam-Il^MID^80","Kim Tae-Young^DEF^80"},
+    ["Spain"]={"Raul^FWD^92","Hierro^DEF^89","Casillas^GK^87","Morientes^FWD^86","Puyol^DEF^86","Valeron^MID^85","Helguera^DEF^84","Mendieta^MID^84","Baraja^MID^83","Joaquin^FWD^82","Romero^DEF^81"},
+    ["Turkey"]={"H. Sukur^FWD^88","Rustu^GK^88","Basturk^MID^84","Mansiz^FWD^84","Emre B.^MID^83","Hasan Sas^FWD^83","Alpay^DEF^82","B. Korkmaz^DEF^82","Davala^DEF^82","Tugay^MID^82","Penbe^DEF^80"},
+  },
+  [2006] = {
+    ["Argentina"]={"Riquelme^FWD^91","Cambiasso^MID^87","Crespo^FWD^87","Ayala^DEF^85","Heinze^DEF^85","Messi^FWD^85","Mascherano^MID^84","Maxi^MID^84","Sorin^DEF^84","Abbondanzieri^GK^83","Coloccini^DEF^81"},
+    ["Brazil"]={"R9^FWD^93","Ronaldinho^FWD^92","Kaka^MID^90","R. Carlos^DEF^89","Cafu^DEF^88","Adriano^FWD^87","Lucio^DEF^87","Dida^GK^86","Emerson^MID^84","Juan^DEF^84","Ze Roberto^MID^84"},
+    ["England"]={"Beckham^MID^91","Gerrard^MID^89","Lampard^MID^89","Ferdinand^DEF^88","Rooney^FWD^88","Terry^DEF^88","A. Cole^DEF^86","G. Neville^DEF^84","J. Cole^FWD^84","Crouch^FWD^82","Robinson^GK^82"},
+    ["France"]={"Zidane^MID^99","Henry^FWD^92","Vieira^MID^89","Makelele^MID^88","Thuram^DEF^88","Trezeguet^FWD^86","Gallas^DEF^85","Ribery^FWD^85","Abidal^DEF^84","Barthez^GK^84","Sagnol^DEF^84"},
+    ["Germany"]={"Ballack^MID^92","Klose^FWD^92","Lehmann^GK^86","Podolski^FWD^86","Frings^MID^84","Lahm^DEF^84","Mertesacker^DEF^84","Schweinsteiger^MID^84","Friedrich^DEF^83","Metzelder^DEF^82","Schneider^FWD^82"},
+    ["Italy"]={"Cannavaro^DEF^97","Buffon^GK^95","Pirlo^MID^92","Totti^FWD^89","Del Piero^FWD^87","Gattuso^MID^87","Toni^FWD^87","Zambrotta^DEF^87","Grosso^DEF^84","Materazzi^DEF^84","Perrotta^MID^83"},
+    ["Netherlands"]={"V. Nistelrooy^FWD^89","Robben^FWD^88","Van der Sar^GK^88","Sneijder^MID^85","Cocu^MID^84","Van Bommel^MID^84","Van Bronckhorst^DEF^84","Van Persie^FWD^84","Mathijsen^DEF^82","Boulahrouz^DEF^81","Ooijer^DEF^80"},
+    ["Portugal"]={"Deco^MID^88","Figo^FWD^88","Ronaldo^FWD^88","Carvalho^DEF^86","Maniche^MID^85","Pauleta^FWD^84","Ricardo^GK^84","Costinha^MID^82","F. Meira^DEF^82","Miguel^DEF^82","N. Valente^DEF^81"},
+    ["Sweden"]={"Larsson^FWD^87","Ljungberg^MID^86","Zlatan^FWD^86","Mellberg^DEF^84","Isaksson^GK^81","Kallstrom^MID^81","Linderoth^MID^81","Lucic^DEF^81","Wilhelmsson^FWD^81","Alexandersson^DEF^80","Edman^DEF^80"},
+  },
+  [2010] = {
+    ["Argentina"]={"Messi^FWD^94","Tevez^FWD^88","Higuain^FWD^87","Mascherano^MID^87","Maxi^MID^84","Di Maria^MID^83","Heinze^DEF^82","Romero^GK^82","Demichelis^DEF^81","Burdisso^DEF^80","Otamendi^DEF^80"},
+    ["Brazil"]={"Kaka^MID^91","Julio Cesar^GK^88","Maicon^DEF^87","L. Fabiano^FWD^86","Lucio^DEF^86","Robinho^FWD^85","Elano^FWD^83","Gilberto^MID^83","Juan^DEF^83","Bastos^DEF^81","Felipe Melo^MID^81"},
+    ["England"]={"Rooney^FWD^92","Gerrard^MID^90","Lampard^MID^90","A. Cole^DEF^88","Terry^DEF^87","Defoe^FWD^84","Barry^MID^83","G. Johnson^DEF^83","James^GK^82","Milner^FWD^82","Upson^DEF^80"},
+    ["Germany"]={"Muller^FWD^92","Schweinsteiger^MID^90","Lahm^DEF^88","Ozil^MID^88","Klose^FWD^86","Neuer^GK^86","Podolski^FWD^85","Khedira^MID^84","Mertesacker^DEF^84","Friedrich^DEF^82","Boateng^DEF^81"},
+    ["Ghana"]={"Gyan^FWD^88","K.P. Boateng^MID^84","Muntari^MID^84","J. Mensah^DEF^82","A. Ayew^FWD^81","Annan^MID^81","Kingson^GK^81","Amoah^FWD^80","Jon. Mensah^DEF^80","Pantsil^DEF^80","Sarpei^DEF^80"},
+    ["Ivory Coast"]={"Drogba^FWD^91","Y. Toure^MID^90","K. Toure^DEF^84","Kalou^FWD^83","Barry^GK^82","Gervinho^FWD^82","Eboue^DEF^81","Zokora^MID^81","Romaric^MID^80","S. Bamba^DEF^80","Tiene^DEF^80"},
+    ["Mexico"]={"Hernandez^FWD^90","R. Marquez^DEF^86","Dos Santos^FWD^84","Salcido^DEF^82","Torrado^MID^82","Vela^FWD^82","O. Perez^GK^81","Aguilar^DEF^80","Castro^MID^80","Juarez^MID^80","Osorio^DEF^80"},
+    ["Netherlands"]={"Sneijder^MID^93","Robben^FWD^92","Van Persie^FWD^87","Stekelenburg^GK^86","De Jong^MID^85","Van Bommel^MID^85","Heitinga^DEF^84","Van Bronckhorst^DEF^84","Kuyt^FWD^83","Mathijsen^DEF^82","Van der Wiel^DEF^82"},
+    ["Portugal"]={"Ronaldo^FWD^94","Carvalho^DEF^86","Deco^MID^86","Pepe^DEF^86","Meireles^MID^84","Simao^FWD^83","Eduardo^GK^82","Tiago^MID^82","Coentrao^DEF^81","H. Almeida^FWD^81","P. Ferreira^DEF^81"},
+    ["Spain"]={"Iniesta^FWD^97","Xavi^MID^96","Casillas^GK^93","Villa^FWD^93","Puyol^DEF^90","Pique^DEF^89","Ramos^DEF^89","Torres^FWD^88","Xabi Alonso^MID^88","Busquets^MID^86","Capdevila^DEF^83"},
+    ["Uruguay"]={"Forlan^FWD^97","Suarez^FWD^89","Godin^DEF^85","Muslera^GK^85","Lugano^DEF^84","Cavani^FWD^83","A. Pereira^MID^82","M. Pereira^DEF^82","D. Perez^MID^81","Arevalo Rios^MID^80","Fucile^DEF^80"},
+  },
+  [2014] = {
+    ["Argentina"]={"Messi^FWD^97","Mascherano^MID^90","Romero^GK^86","Higuain^FWD^85","Zabaleta^DEF^85","Garay^DEF^83","Lavezzi^FWD^83","Demichelis^DEF^81","Biglia^MID^80","Perez^MID^80","Rojo^DEF^80"},
+    ["Belgium"]={"Courtois^GK^88","De Bruyne^MID^87","Hazard^FWD^87","Kompany^DEF^87","Vertonghen^DEF^86","Lukaku^FWD^85","Mertens^FWD^83","Vermaelen^DEF^83","Witsel^MID^83","Alderweireld^DEF^82","Fellaini^MID^82"},
+    ["Brazil"]={"Neymar^FWD^96","Thiago Silva^DEF^89","Dani Alves^DEF^88","Marcelo^DEF^87","David Luiz^DEF^86","Julio Cesar^GK^85","Oscar^MID^85","Fernandinho^MID^84","Hulk^FWD^84","L. Gustavo^MID^82","Fred^FWD^80"},
+    ["Chile"]={"A. Sanchez^FWD^89","Vidal^MID^87","Bravo^GK^85","Medel^DEF^84","Vargas^FWD^84","Aranguiz^MID^82","Isla^DEF^81","M. Diaz^MID^81","Beausejour^FWD^80","Jara^DEF^80","Mena^DEF^80"},
+    ["Colombia"]={"James^FWD^96","Cuadrado^MID^87","Ospina^GK^84","J. Martinez^FWD^82","Yepes^DEF^82","Zapata^DEF^81","Aguilar^MID^80","Armero^DEF^80","C. Sanchez^MID^80","Ibarbo^FWD^80","Zuniga^DEF^80"},
+    ["Costa Rica"]={"K. Navas^GK^91","B. Ruiz^FWD^84","J. Campbell^FWD^83","Bolanos^MID^81","Borges^MID^81","Acosta^DEF^80","Gamboa^DEF^80","J. Diaz^DEF^80","Tejeda^MID^80","Umana^DEF^80","Urena^FWD^80"},
+    ["France"]={"Benzema^FWD^89","Pogba^MID^86","Lloris^GK^85","Griezmann^FWD^84","Varane^DEF^84","Cabaye^MID^83","Evra^DEF^83","Matuidi^MID^82","Sagna^DEF^82","Valbuena^FWD^82","Sakho^DEF^81"},
+    ["Germany"]={"Neuer^GK^96","Muller^FWD^92","Kroos^MID^91","Schweinsteiger^MID^91","Lahm^DEF^90","Hummels^DEF^88","Boateng^DEF^87","Ozil^MID^87","Klose^FWD^86","Khedira^FWD^85","Howedes^DEF^81"},
+    ["Italy"]={"Pirlo^MID^92","Buffon^GK^88","Chiellini^DEF^88","De Rossi^MID^87","Balotelli^FWD^86","Bonucci^DEF^86","Verratti^MID^83","Immobile^FWD^82","Abate^DEF^81","Insigne^FWD^81","Darmian^DEF^80"},
+    ["Netherlands"]={"Robben^FWD^93","Sneijder^MID^90","Van Persie^FWD^90","Cillessen^GK^84","De Jong^MID^84","Vlaar^DEF^84","Blind^DEF^82","De Vrij^DEF^82","Kuyt^FWD^82","Wijnaldum^MID^81","Janmaat^DEF^80"},
+    ["Portugal"]={"Ronaldo^FWD^95","Pepe^DEF^87","Nani^FWD^85","Meireles^MID^84","Moutinho^MID^84","Patricio^GK^83","B. Alves^DEF^82","Coentrao^DEF^82","Veloso^MID^81","Eder^FWD^80","J. Pereira^DEF^80"},
+    ["USA"]={"Howard^GK^89","Dempsey^FWD^84","J. Jones^MID^83","F. Johnson^DEF^82","M. Bradley^MID^82","Altidore^FWD^81","Besler^DEF^81","Beasley^DEF^80","Beckerman^MID^80","Bedoya^FWD^80","Cameron^DEF^80"},
+    ["Uruguay"]={"Suarez^FWD^92","Cavani^FWD^88","Godin^DEF^88","Muslera^GK^86","Forlan^FWD^84","Lugano^DEF^84","A. Pereira^MID^82","Caceres^DEF^82","Arevalo Rios^MID^81","M. Pereira^DEF^81","A. Gonzalez^MID^80"},
+  },
+  [2018] = {
+    ["Argentina"]={"Messi^FWD^95","Aguero^FWD^87","Mascherano^MID^86","Di Maria^FWD^85","Banega^MID^83","Otamendi^DEF^83","Mercado^DEF^81","Tagliafico^DEF^81","Armani^GK^80","E. Perez^MID^80","Rojo^DEF^80"},
+    ["Belgium"]={"De Bruyne^MID^93","Hazard^FWD^93","Courtois^GK^91","Lukaku^FWD^89","Vertonghen^DEF^87","Alderweireld^DEF^86","Kompany^DEF^86","Mertens^FWD^84","Witsel^MID^84","Fellaini^MID^82","Meunier^DEF^82"},
+    ["Brazil"]={"Neymar^FWD^94","Coutinho^MID^89","Alisson^GK^88","Casemiro^MID^87","Thiago Silva^DEF^87","Marcelo^DEF^86","Jesus^FWD^84","Miranda^DEF^84","Willian^FWD^84","Paulinho^MID^83","Fagner^DEF^80"},
+    ["Croatia"]={"Modric^MID^96","Mandzukic^FWD^87","Perisic^FWD^87","Rakitic^MID^87","Brozovic^MID^84","Lovren^DEF^84","Subasic^GK^84","Vida^DEF^82","Vrsaljko^DEF^82","Rebic^FWD^81","Strinic^DEF^80"},
+    ["Egypt"]={"Salah^FWD^95","El-Shenawy^GK^82","Elneny^MID^82","Hegazi^DEF^82","M. Hassan^MID^81","Abdel Shafy^DEF^80","Fathy^DEF^80","Gabr^DEF^80","Hamed^MID^80","Marwan^FWD^80","Said^FWD^80"},
+    ["England"]={"Kane^FWD^90","Sterling^FWD^86","Henderson^MID^84","Pickford^GK^84","Stones^DEF^84","Trippier^DEF^84","Walker^DEF^84","Alli^MID^83","Maguire^DEF^83","Lingard^FWD^82","Dier^MID^81"},
+    ["France"]={"Mbappe^FWD^98","Griezmann^FWD^93","Pogba^MID^91","Kante^MID^90","Varane^DEF^88","Lloris^GK^86","Umtiti^DEF^84","Matuidi^MID^83","Giroud^FWD^82","L. Hernandez^DEF^82","Pavard^DEF^82"},
+    ["Germany"]={"Neuer^GK^93","Kroos^MID^91","Kimmich^DEF^88","Hummels^DEF^87","Muller^FWD^87","Boateng^DEF^86","Ozil^MID^85","Werner^FWD^85","Reus^FWD^84","Khedira^MID^83","Hector^DEF^81"},
+    ["Mexico"]={"Ochoa^GK^93","Lozano^FWD^85","Hernandez^FWD^84","Vela^FWD^84","H. Moreno^DEF^83","J. Guardado^MID^83","H. Herrera^MID^82","Layun^MID^82","Salcedo^DEF^81","Ayala^DEF^80","Gallardo^DEF^80"},
+    ["Portugal"]={"Ronaldo^FWD^99","B. Silva^MID^86","Moutinho^MID^84","Patricio^GK^84","Pepe^DEF^84","Quaresma^FWD^83","Guerreiro^DEF^82","W. Carvalho^MID^82","Fonte^DEF^81","Guedes^FWD^81","Cedric^DEF^80"},
+    ["Spain"]={"Ramos^DEF^90","Iniesta^MID^89","Busquets^MID^87","D. Silva^FWD^87","De Gea^GK^87","Isco^FWD^87","Pique^DEF^87","D. Costa^FWD^86","J. Alba^DEF^86","Carvajal^DEF^84","Koke^MID^84"},
+    ["Uruguay"]={"Suarez^FWD^91","Cavani^FWD^89","Godin^DEF^88","Gimenez^DEF^84","Muslera^GK^84","Vecino^MID^82","Bentancur^MID^81","Caceres^DEF^81","R. Sanchez^FWD^81","Laxalt^DEF^80","Nandez^MID^80"},
+  },
+  [2022] = {
+    ["Argentina"]={"Messi^FWD^99","E. Martinez^GK^90","Alvarez^FWD^87","Di Maria^FWD^87","E. Fernandez^MID^87","C. Romero^DEF^86","De Paul^MID^86","Mac Allister^MID^86","Otamendi^DEF^84","Acuna^DEF^82","Molina^DEF^81"},
+    ["Belgium"]={"De Bruyne^MID^94","Courtois^GK^92","Lukaku^FWD^86","Alderweireld^DEF^84","Hazard^FWD^84","Tielemans^MID^84","Carrasco^FWD^83","Vertonghen^DEF^83","Castagne^DEF^82","Meunier^DEF^82","Witsel^MID^82"},
+    ["Brazil"]={"Alisson^GK^91","Vinicius^FWD^90","Casemiro^MID^89","Marquinhos^DEF^89","Paqueta^MID^86","Raphinha^FWD^86","Richarlison^FWD^86","Thiago Silva^DEF^86","Danilo^DEF^83","Fred^MID^83","Sandro^DEF^82"},
+    ["Croatia"]={"Modric^MID^93","Gvardiol^DEF^87","Livakovic^GK^87","Brozovic^MID^86","Kovacic^MID^86","Perisic^FWD^86","Kramaric^FWD^84","Juranovic^DEF^82","Lovren^DEF^82","Petkovic^FWD^82","Sosa^DEF^81"},
+    ["England"]={"Kane^FWD^92","Bellingham^MID^88","Foden^FWD^87","Saka^FWD^87","Pickford^GK^86","Rice^MID^86","Stones^DEF^86","Walker^DEF^86","Maguire^DEF^84","Shaw^DEF^84","Henderson^MID^83"},
+    ["France"]={"Mbappe^FWD^97","Griezmann^MID^90","Lloris^GK^86","T. Hernandez^DEF^86","Varane^DEF^86","Dembele^FWD^85","Kounde^DEF^85","Tchouameni^MID^85","Giroud^FWD^84","Rabiot^MID^83","Upamecano^DEF^83"},
+    ["Japan"]={"Mitoma^FWD^85","Doan^FWD^83","Endo^MID^83","Kamada^MID^83","Yoshida^DEF^83","Gonda^GK^82","Itakura^DEF^82","Maeda^FWD^81","Morita^MID^81","Nagatomo^DEF^80","Yamane^DEF^80"},
+    ["Morocco"]={"Bono^GK^92","Hakimi^DEF^90","Amrabat^MID^87","Ziyech^FWD^86","En-Nesyri^FWD^84","Mazraoui^DEF^84","Ounahi^MID^84","Saiss^DEF^84","Aguerd^DEF^83","Boufal^FWD^83","Amallah^MID^82"},
+    ["Netherlands"]={"Van Dijk^DEF^92","De Jong^MID^88","Gakpo^FWD^87","Depay^FWD^86","Dumfries^DEF^85","Ake^DEF^84","Blind^DEF^83","Bergwijn^FWD^82","De Roon^MID^82","Klaassen^MID^82","Noppert^GK^82"},
+    ["Poland"]={"Lewandowski^FWD^93","Szczesny^GK^87","Zielinski^MID^84","Cash^DEF^82","Kiwior^DEF^82","Krychowiak^MID^82","Milik^FWD^82","Frankowski^FWD^81","Glik^DEF^81","Szymanski^MID^81","Bereszynski^DEF^80"},
+    ["Portugal"]={"Ronaldo^FWD^90","B. Silva^MID^88","Bruno F.^MID^88","Leao^FWD^88","Ruben Dias^DEF^88","Diogo Costa^GK^86","G. Ramos^FWD^84","Pepe^DEF^84","Vitinha^MID^84","Dalot^DEF^83","Guerreiro^DEF^83"},
+    ["South Korea"]={"Son^FWD^91","Min-jae^DEF^87","Hee-chan^FWD^83","Seung-gyu^GK^83","In-beom^MID^82","Jae-sung^MID^82","Young-gwon^DEF^82","Gue-sung^FWD^81","Jin-su^DEF^81","Moon-hwan^DEF^80","Woo-young^MID^80"},
+    ["Spain"]={"Pedri^MID^88","Laporte^DEF^86","Carvajal^DEF^85","Gavi^MID^85","Unai Simon^GK^85","Asensio^FWD^84","Busquets^MID^84","F. Torres^FWD^84","J. Alba^DEF^84","Morata^FWD^84","R. Hernandez^DEF^82"},
+    ["Wales"]={"Bale^FWD^93","Ramsey^MID^84","B. Davies^DEF^83","Ampadu^MID^82","C. Roberts^DEF^82","Rodon^DEF^82","D. James^FWD^81","J. Allen^MID^81","Hennessey^GK^80","K. Moore^FWD^80","Neco^DEF^80"},
+  },
+  [2026] = {
+    ["Argentina"]={"Messi^FWD^93","E. Martinez^GK^91","Lautaro^FWD^90","C. Romero^DEF^89","J. Alvarez^FWD^89","Mac Allister^MID^89","E. Fernandez^MID^88","Lisandro^DEF^87","De Paul^MID^86","Acuna^DEF^84","Molina^DEF^84"},
+    ["Belgium"]={"De Bruyne^MID^91","Lukaku^FWD^87","Doku^FWD^86","A. Onana^MID^84","Tielemans^MID^84","Castagne^DEF^83","Trossard^FWD^83","Casteels^GK^82","Faes^DEF^81","De Cuyper^DEF^80","Debast^DEF^80"},
+    ["Brazil"]={"Vinicius^FWD^93","Raphinha^FWD^91","Alisson^GK^90","B. Guimaraes^MID^87","Estevao^FWD^87","Gabriel^DEF^87","Marquinhos^DEF^87","Paqueta^MID^84","A. Pereira^MID^82","Vanderson^DEF^82","Wendell^DEF^81"},
+    ["Canada"]={"Davies^DEF^90","J. David^FWD^88","Eustaquio^MID^84","A. Johnston^DEF^83","Buchanan^FWD^82","Kone^MID^81","Bombito^DEF^80","Crepeau^GK^80","Shaffelburg^FWD^80","Vitoria^DEF^78","Wotherspoon^MID^78"},
+    ["England"]={"Kane^FWD^94","Bellingham^MID^93","Saka^FWD^91","Foden^MID^89","Palmer^FWD^89","Rice^MID^89","Pickford^GK^87","Stones^DEF^86","Walker^DEF^85","Konsa^DEF^84","L. Shaw^DEF^83"},
+    ["France"]={"Mbappe^FWD^97","Dembele^FWD^96","Saliba^DEF^90","Maignan^GK^88","Kounde^DEF^87","Olise^MID^87","T. Hernandez^DEF^87","Tchouameni^MID^87","Camavinga^MID^86","Doue^FWD^86","Upamecano^DEF^86"},
+    ["Germany"]={"Wirtz^MID^91","Musiala^FWD^90","Kimmich^DEF^88","Ter Stegen^GK^88","Rudiger^DEF^87","Havertz^FWD^86","Sane^FWD^85","Pavlovic^MID^84","Tah^DEF^84","Mittelstadt^DEF^83","Andrich^MID^82"},
+    ["Japan"]={"Mitoma^FWD^90","Kubo^FWD^89","Itakura^DEF^85","W. Endo^MID^85","Kamada^MID^84","Tomiyasu^DEF^84","Z. Suzuki^GK^83","A. Ueda^FWD^81","H. Ito^DEF^81","Tanaka^MID^81","Sugawara^DEF^80"},
+    ["Mexico"]={"E. Alvarez^MID^86","S. Gimenez^FWD^85","Lozano^FWD^84","R. Jimenez^FWD^84","Malagon^GK^83","O. Vega^MID^83","C. Montes^DEF^82","J. Vasquez^DEF^82","Chavez^MID^81","Gallardo^DEF^81","J. Sanchez^DEF^81"},
+    ["Morocco"]={"Hakimi^DEF^92","Bono^GK^88","Amrabat^MID^86","B. Diaz^FWD^86","En-Nesyri^FWD^86","Aguerd^DEF^85","Mazraoui^DEF^85","Ounahi^MID^84","Ziyech^FWD^84","Ben Seghir^MID^81","El Yamiq^DEF^81"},
+    ["Netherlands"]={"Van Dijk^DEF^90","F. de Jong^MID^88","Gakpo^FWD^87","X. Simons^FWD^87","Reijnders^MID^86","De Ligt^DEF^85","Ake^DEF^84","Verbruggen^GK^84","Depay^FWD^83","Geertruida^DEF^82","Schouten^MID^82"},
+    ["Norway"]={"Haaland^FWD^96","Odegaard^MID^90","Sorloth^FWD^85","Ajer^DEF^84","Berge^MID^84","Bobb^FWD^82","Nyland^GK^82","Aasgaard^MID^81","Hanche-Olsen^DEF^81","M. Wolfe^DEF^81","Pedersen^DEF^81"},
+    ["Portugal"]={"Ruben Dias^DEF^89","B. Silva^MID^88","Ronaldo^FWD^88","Vitinha^MID^88","B. Fernandes^MID^87","Diogo Costa^GK^87","N. Mendes^DEF^87","Cancelo^DEF^86","Leao^FWD^86","G. Inacio^DEF^84","P. Neto^FWD^84"},
+    ["Spain"]={"Yamal^FWD^97","Rodri^MID^94","Pedri^MID^92","N. Williams^FWD^89","Carvajal^DEF^87","Cubarsi^DEF^86","F. Ruiz^MID^86","Oyarzabal^FWD^86","Unai Simon^GK^86","Cucurella^DEF^85","Le Normand^DEF^85"},
+    ["USA"]={"Pulisic^FWD^89","A. Robinson^DEF^86","McKennie^MID^86","Adams^MID^85","Balogun^FWD^84","C. Richards^DEF^84","Dest^DEF^84","Reyna^MID^84","Turner^GK^84","Weah^FWD^84","Ream^DEF^83"},
+  },
+}
+local SPEC = {
+  {"Brazil",2002,"SB R9","R9","FWD",106,0},
+  {"Germany",2002,"GB Kahn","Kahn","GK",108,0},
+  {"Brazil",2006,"Ronaldinho","Ronaldinho","FWD",104,70000},
+  {"France",2006,"GB Zidane","Zidane","MID",108,0},
+  {"France",2006,"Henry","Henry","FWD",102,50000},
+  {"Italy",2006,"SB Cannavaro","Cannavaro","DEF",106,0},
+  {"Italy",2006,"Buffon","Buffon","GK",105,0},
+  {"Italy",2006,"Pirlo","Pirlo","MID",101,45000},
+  {"Sweden",2006,"Zlatan","Zlatan","FWD",103,60000},
+  {"Brazil",2010,"Kaka","Kaka","MID",101,45000},
+  {"Ivory Coast",2010,"Drogba","Drogba","FWD",101,45000},
+  {"Netherlands",2010,"SB Sneijder","Sneijder","MID",105,0},
+  {"Netherlands",2010,"Robben","Robben","FWD",100,40000},
+  {"Spain",2010,"Iniesta","Iniesta","FWD",105,0},
+  {"Spain",2010,"Xavi","Xavi","MID",101,45000},
+  {"Uruguay",2010,"GB Forlan","Forlan","FWD",107,0},
+  {"Argentina",2014,"Messi","Messi","FWD",104,70000},
+  {"Brazil",2014,"Neymar","Neymar","FWD",103,60000},
+  {"Germany",2014,"Kroos","Kroos","MID",105,0},
+  {"Germany",2014,"Neuer","Neuer","GK",105,0},
+  {"Germany",2014,"SB Muller","Muller","FWD",105,0},
+  {"Uruguay",2014,"Suarez","Suarez","FWD",102,50000},
+  {"Belgium",2018,"SB Hazard","Hazard","FWD",106,0},
+  {"Belgium",2018,"De Bruyne","De Bruyne","MID",102,50000},
+  {"Croatia",2018,"GB Modric","Modric","MID",107,0},
+  {"Egypt",2018,"Salah","Salah","FWD",100,40000},
+  {"France",2018,"Griezmann","Griezmann","FWD",105,0},
+  {"France",2018,"Pogba","Pogba","MID",105,0},
+  {"Portugal",2018,"Ronaldo","Ronaldo","FWD",104,70000},
+  {"Argentina",2022,"GB Messi","Messi","FWD",109,0},
+  {"Argentina",2022,"Di Maria","Di Maria","FWD",105,0},
+  {"France",2022,"SB Mbappe","Mbappe","FWD",105,0},
+  {"South Korea",2022,"Son","Son","FWD",100,40000},
+  {"Brazil",2026,"Vinicius","Vinicius","FWD",102,50000},
+  {"England",2026,"Bellingham","Bellingham","MID",102,50000},
+  {"France",2026,"Mbappe","Mbappe","FWD",104,70000},
+  {"Norway",2026,"Haaland","Haaland","FWD",103,60000},
+  {"Spain",2026,"Yamal","Yamal","FWD",103,60000},
+}
+-- reconstruct WorldCupData + SpecialCards from the embedded snapshot above.
+-- NO require()/getscriptclosure on game modules -> the game's require path is
+-- never tainted, so in-game nav buttons (Shop/Collection/BestTeam/...) keep
+-- working. (root cause of "przyciski nie dzialaja": touching a game ModuleScript
+-- from the executor thread globally poisons the engine require path.)
+local WorldCupData = { Teams = {} }
+for year, byC in pairs(WCD) do
+    WorldCupData.Teams[year] = {}
+    for country, cards in pairs(byC) do
+        local players = {}
+        for _, s in ipairs(cards) do
+            local n, p, o = s:match("^(.*)%^(%a+)%^(%d+)$")
+            if n then players[#players + 1] = { name = n, pos = p, ovr = tonumber(o) } end
+        end
+        WorldCupData.Teams[year][country] = { players = players }
+    end
+end
+
+local SCmod = {}
+do
+    local Specials, flat = {}, {}
+    for _, e in ipairs(SPEC) do
+        local country, year, vn, bn, pos, ovr, price = e[1], e[2], e[3], e[4], e[5], e[6], e[7]
+        local def = {
+            variantName = vn, baseName = bn, pos = pos, ovr = ovr,
+            coinPrice = (price > 0) and price or nil,
+            gated = price > 0,
+        }
+        flat[#flat + 1] = { country = country, year = year, baseName = bn, def = def }
+        Specials[year] = Specials[year] or {}
+        Specials[year][country] = Specials[year][country] or {}
+        local slot = Specials[year][country]
+        if (not slot[bn]) or def.gated then slot[bn] = def end -- priced entry wins baseName slot
+    end
+    SCmod.Specials = Specials
+    function SCmod.Each() return flat end
+    function SCmod.GetForBase(year, country, baseName)
+        local a = Specials[year]; local b = a and a[country]
+        return b and b[baseName] or nil
+    end
+end
 
 -- teamsCY[country][year] = { {name,pos,ovr}, ... } sorted by OVR desc.
 -- Each roll lands on ONE exact team (top-level country + year on RollResult),
 -- so we index by country AND year to show that precise squad.
 local teamsCY = {}
 do
-    for year, teams in pairs(WorldCupData.Teams) do
+    for year, teams in pairs((WorldCupData and WorldCupData.Teams) or {}) do
         for country, team in pairs(teams) do
             teamsCY[country] = teamsCY[country] or {}
             local list = {}
@@ -282,7 +544,7 @@ end
 -- teams. They live in SpecialCards.Specials[year][country][baseName] with a
 -- boosted ovr + variantName; position comes from the base player.
 pcall(function()
-    local SC = require(RS:WaitForChild("SpecialCards"))
+    local SC = SCmod
     for _, e in ipairs(SC.Each()) do
         local byYear = teamsCY[e.country]
         local team = byYear and byYear[e.year]
@@ -348,6 +610,8 @@ local STR = {
         questmin = "min", questplayed = "grasz",
         request = "Auto reconnect (questy)",
         persist = "Zapamietaj opcje (reconnect)",
+        hunt = "Poluj OVR+ (reroll)",
+        hunttgt = "Cel OVR (maks 120)",
     },
     EN = {
         cash = "Cash", autoroll = "Auto Roll", autobuy = "Auto Buy (shop)",
@@ -368,6 +632,8 @@ local STR = {
         questmin = "min", questplayed = "played",
         request = "Auto reconnect (quests)",
         persist = "Remember options (reconnect)",
+        hunt = "Hunt OVR+ (reroll)",
+        hunttgt = "Target OVR (max 120)",
     },
 }
 local function tr(k) return (STR[State.lang] or STR.PL)[k] or k end
@@ -415,8 +681,6 @@ local RequestUnlockedSpecials= Remotes:FindFirstChild("RequestUnlockedSpecials")
 local PurchasePlayerUnlock   = Remotes:FindFirstChild("PurchasePlayerUnlock")
 local RequestQuestState      = Remotes:FindFirstChild("RequestQuestState")
 local QuestComplete          = Remotes:FindFirstChild("QuestComplete")
-local SCmod = nil
-pcall(function() SCmod = require(RS:WaitForChild("SpecialCards")) end)
 
 local function fetchCoins()
     if not RequestCoins then return State.coins end
@@ -621,7 +885,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(230, 430)
+main.Size = UDim2.fromOffset(230, 500)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -731,7 +995,7 @@ local function makeToggle(y, key, getVal, onChange)
 end
 
 local applyLang           -- forward decl (defined after render fns)
-local paintRoll = makeToggle(56, "autoroll", function() return State.on end,
+paintRoll = makeToggle(56, "autoroll", function() return State.on end,
     function(v) State.on = v end)
 local paintBuy = makeToggle(90, "autobuy", function() return State.autoBuy end,
     function(v) State.autoBuy = v end)
@@ -743,6 +1007,51 @@ local paintReq = makeToggle(192, "request", function() return State.reQuest end,
     function(v) State.reQuest = v end)
 local paintPersist = makeToggle(226, "persist", function() return State.persist end,
     function(v) State.persist = v end)
+-- HUNT toggle (bottom row, below the panel buttons). On -> forces fill-loop off.
+paintHunt = makeToggle(430, "hunt", function() return State.hunt end,
+    function(v) State.hunt = v; if v then State.on = false; pcall(paintRoll) end end)
+
+-- HUNT target OVR input: type a value, clamped to [80,120]. Drives State.huntTarget
+-- (the OVR the hunt loop stops at). Default 103. Max 120.
+local htRow = Instance.new("Frame")
+htRow.Size = UDim2.new(1, -20, 0, 26)
+htRow.Position = UDim2.fromOffset(10, 464)
+htRow.BackgroundColor3 = BG2
+htRow.BorderSizePixel = 0
+htRow.Parent = main
+Instance.new("UICorner", htRow).CornerRadius = UDim.new(0, 8)
+
+local htLbl = Instance.new("TextLabel")
+htLbl.Size = UDim2.new(1, -74, 1, 0)
+htLbl.Position = UDim2.fromOffset(10, 0)
+htLbl.BackgroundTransparency = 1
+htLbl.Text = tr("hunttgt")
+htLbl.TextColor3 = Color3.fromRGB(225, 232, 228)
+htLbl.TextXAlignment = Enum.TextXAlignment.Left
+htLbl.Font = Enum.Font.Gotham
+htLbl.TextSize = 13
+htLbl.Parent = htRow
+langUpdaters[#langUpdaters + 1] = function() htLbl.Text = tr("hunttgt") end
+
+local htBox = Instance.new("TextBox")
+htBox.Size = UDim2.fromOffset(54, 20)
+htBox.Position = UDim2.new(1, -62, 0.5, -10)
+htBox.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
+htBox.TextColor3 = Color3.fromRGB(245, 245, 245)
+htBox.Font = Enum.Font.GothamBold
+htBox.TextSize = 13
+htBox.ClearTextOnFocus = false
+htBox.Text = tostring(State.huntTarget)
+htBox.Parent = htRow
+Instance.new("UICorner", htBox).CornerRadius = UDim.new(0, 6)
+
+htBox.FocusLost:Connect(function()
+    local v = tonumber((htBox.Text:gsub("%D", "")))
+    if not v then v = State.huntTarget end
+    if v < 80 then v = 80 elseif v > 120 then v = 120 end
+    State.huntTarget = math.floor(v)
+    htBox.Text = tostring(State.huntTarget)
+end)
 
 -- restore toggle states after a teleport reload (called by the queued reloader).
 -- applies the exact options that were on before the reconnect; fps needs setFps()
