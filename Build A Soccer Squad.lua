@@ -334,6 +334,10 @@ local STR = {
         spbtn = "Karty specjalne (sklep)", sptitle = "Karty specjalne",
         spno = "SpecialCards niedostepne", own = "MAM",
         have = "masz", last = "last", buy = "kup",
+        questbtn = "Questy (postep)", questtitle = "Questy",
+        questno = "questy niedostepne", questdone = "ZROBIONE",
+        questclaimed = "ODEBRANE", questreward = "nagroda",
+        questmin = "min", questplayed = "grasz",
     },
     EN = {
         cash = "Cash", autoroll = "Auto Roll", autobuy = "Auto Buy (shop)",
@@ -348,6 +352,10 @@ local STR = {
         spbtn = "Special cards (shop)", sptitle = "Special cards",
         spno = "SpecialCards unavailable", own = "OWN",
         have = "have", last = "last", buy = "buy",
+        questbtn = "Quests (progress)", questtitle = "Quests",
+        questno = "quests unavailable", questdone = "DONE",
+        questclaimed = "CLAIMED", questreward = "reward",
+        questmin = "min", questplayed = "played",
     },
 }
 local function tr(k) return (STR[State.lang] or STR.PL)[k] or k end
@@ -393,6 +401,7 @@ local CoinsUpdate            = Remotes:FindFirstChild("CoinsUpdate")
 local RequestPrimeShop       = Remotes:FindFirstChild("RequestPrimeShop")
 local RequestUnlockedSpecials= Remotes:FindFirstChild("RequestUnlockedSpecials")
 local PurchasePlayerUnlock   = Remotes:FindFirstChild("PurchasePlayerUnlock")
+local RequestQuestState      = Remotes:FindFirstChild("RequestQuestState")
 local SCmod = nil
 pcall(function() SCmod = require(RS:WaitForChild("SpecialCards")) end)
 
@@ -599,7 +608,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(230, 330)
+main.Size = UDim2.fromOffset(230, 362)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -1359,6 +1368,187 @@ task.spawn(function()
     end
 end)
 
+--==================== quests panel (play-time quests + progress) ====================
+-- RequestQuestState (RF) -> { joinTime, now, quests={["1"]={id,label,minutes,reward,rerolls,refreshes},...},
+--   claimed={ [id]=true, ... } }. progress = elapsed minutes since joinTime vs quest.minutes.
+local questBtn = Instance.new("TextButton")
+questBtn.Size = UDim2.new(1, -20, 0, 26)
+questBtn.Position = UDim2.fromOffset(10, 328)
+questBtn.BackgroundColor3 = BG2
+questBtn.Text = tr("questbtn")
+questBtn.TextColor3 = Color3.fromRGB(150, 205, 255)
+questBtn.Font = Enum.Font.GothamSemibold
+questBtn.TextSize = 13
+questBtn.AutoButtonColor = true
+questBtn.Parent = main
+Instance.new("UICorner", questBtn).CornerRadius = UDim.new(0, 8)
+
+local qp = Instance.new("Frame")
+qp.Size = UDim2.fromOffset(320, 300)
+qp.Position = UDim2.new(0.5, -160, 0.5, -150)
+qp.BackgroundColor3 = BG
+qp.BorderSizePixel = 0
+qp.Active = true
+qp.Visible = false
+qp.Parent = gui
+Instance.new("UICorner", qp).CornerRadius = UDim.new(0, 10)
+do
+    local s = Instance.new("UIStroke", qp)
+    s.Color = Color3.fromRGB(150, 205, 255); s.Thickness = 1.5; s.Transparency = 0.3
+end
+
+local qpTitle = Instance.new("TextLabel")
+qpTitle.Size = UDim2.new(1, 0, 0, 28)
+qpTitle.BackgroundTransparency = 1
+qpTitle.Text = tr("questtitle")
+qpTitle.TextColor3 = Color3.fromRGB(190, 225, 255)
+qpTitle.Font = Enum.Font.GothamBold
+qpTitle.TextSize = 15
+qpTitle.Parent = qp
+makeDraggable(qp, qpTitle)
+
+local qpClose = Instance.new("TextButton")
+qpClose.Size = UDim2.fromOffset(24, 24)
+qpClose.Position = UDim2.new(1, -30, 0, 4)
+qpClose.BackgroundColor3 = Color3.fromRGB(70, 46, 46)
+qpClose.Text = "X"
+qpClose.TextColor3 = Color3.fromRGB(240, 210, 210)
+qpClose.Font = Enum.Font.GothamBold
+qpClose.TextSize = 13
+qpClose.Parent = qp
+Instance.new("UICorner", qpClose).CornerRadius = UDim.new(0, 6)
+qpClose.MouseButton1Click:Connect(function() qp.Visible = false end)
+
+local qpScroll = Instance.new("ScrollingFrame")
+qpScroll.Size = UDim2.new(1, -20, 1, -40)
+qpScroll.Position = UDim2.fromOffset(10, 34)
+qpScroll.BackgroundColor3 = BG2
+qpScroll.BorderSizePixel = 0
+qpScroll.ScrollBarThickness = 4
+qpScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+qpScroll.Parent = qp
+Instance.new("UICorner", qpScroll).CornerRadius = UDim.new(0, 8)
+do
+    local l = Instance.new("UIListLayout", qpScroll)
+    l.Padding = UDim.new(0, 6); l.SortOrder = Enum.SortOrder.LayoutOrder
+    local pad = Instance.new("UIPadding", qpScroll)
+    pad.PaddingLeft = UDim.new(0, 8); pad.PaddingRight = UDim.new(0, 8); pad.PaddingTop = UDim.new(0, 6)
+end
+
+local function renderQuests()
+    for _, c in ipairs(qpScroll:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    if not RequestQuestState then
+        qpTitle.Text = tr("questno")
+        return
+    end
+    qpTitle.Text = tr("questtitle")
+    local ok, st = pcall(function() return RequestQuestState:InvokeServer() end)
+    if not ok or type(st) ~= "table" or type(st.quests) ~= "table" then
+        qpTitle.Text = tr("questno")
+        return
+    end
+    local elapsed = 0
+    if type(st.now) == "number" and type(st.joinTime) == "number" then
+        elapsed = (st.now - st.joinTime) / 60   -- minutes
+    end
+    local claimed = type(st.claimed) == "table" and st.claimed or {}
+    -- flatten quests table (keyed "1".."4") into a list, sort by minutes
+    local list = {}
+    for _, q in pairs(st.quests) do
+        if type(q) == "table" and q.minutes then list[#list + 1] = q end
+    end
+    table.sort(list, function(a, b) return (a.minutes or 0) < (b.minutes or 0) end)
+
+    local n = 0
+    for _, q in ipairs(list) do
+        n = n + 1
+        local mins = q.minutes or 0
+        local frac = mins > 0 and math.min(elapsed / mins, 1) or 1
+        local isClaimed = q.id and claimed[q.id] == true
+        local isDone = frac >= 1
+
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, -8, 0, 58)
+        card.BackgroundColor3 = Color3.fromRGB(30, 36, 42)
+        card.BorderSizePixel = 0
+        card.LayoutOrder = n
+        card.Parent = qpScroll
+        Instance.new("UICorner", card).CornerRadius = UDim.new(0, 6)
+
+        local name = Instance.new("TextLabel")
+        name.Size = UDim2.new(1, -16, 0, 16)
+        name.Position = UDim2.fromOffset(8, 5)
+        name.BackgroundTransparency = 1
+        name.Text = tostring(q.label or q.id or "?")
+        name.TextColor3 = Color3.fromRGB(225, 235, 245)
+        name.TextXAlignment = Enum.TextXAlignment.Left
+        name.Font = Enum.Font.GothamSemibold
+        name.TextSize = 13
+        name.Parent = card
+
+        -- status tag (top-right)
+        local tag = Instance.new("TextLabel")
+        tag.Size = UDim2.new(0, 70, 0, 16)
+        tag.Position = UDim2.new(1, -78, 0, 5)
+        tag.BackgroundTransparency = 1
+        tag.TextXAlignment = Enum.TextXAlignment.Right
+        tag.Font = Enum.Font.GothamBold
+        tag.TextSize = 11
+        if isClaimed then
+            tag.Text = tr("questclaimed"); tag.TextColor3 = Color3.fromRGB(120, 200, 140)
+        elseif isDone then
+            tag.Text = tr("questdone"); tag.TextColor3 = Color3.fromRGB(255, 205, 90)
+        else
+            tag.Text = ""
+        end
+        tag.Parent = card
+
+        -- progress bar bg
+        local barBg = Instance.new("Frame")
+        barBg.Size = UDim2.new(1, -16, 0, 8)
+        barBg.Position = UDim2.fromOffset(8, 26)
+        barBg.BackgroundColor3 = Color3.fromRGB(50, 58, 66)
+        barBg.BorderSizePixel = 0
+        barBg.Parent = card
+        Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+        local barFill = Instance.new("Frame")
+        barFill.Size = UDim2.new(frac, 0, 1, 0)
+        barFill.BackgroundColor3 = isDone and Color3.fromRGB(120, 200, 140) or Color3.fromRGB(90, 170, 255)
+        barFill.BorderSizePixel = 0
+        barFill.Parent = barBg
+        Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
+
+        -- bottom line: elapsed/min + reward
+        local info = Instance.new("TextLabel")
+        info.Size = UDim2.new(1, -16, 0, 14)
+        info.Position = UDim2.fromOffset(8, 38)
+        info.BackgroundTransparency = 1
+        info.Text = string.format("%s %.0f / %d %s   •   %s %s",
+            tr("questplayed"), math.min(elapsed, mins), mins, tr("questmin"),
+            tr("questreward"), tostring(q.reward or 0))
+        info.TextColor3 = Color3.fromRGB(150, 165, 175)
+        info.TextXAlignment = Enum.TextXAlignment.Left
+        info.Font = Enum.Font.RobotoMono
+        info.TextSize = 11
+        info.Parent = card
+    end
+    qpScroll.CanvasSize = UDim2.new(0, 0, 0, n * 64 + 8)
+end
+
+questBtn.MouseButton1Click:Connect(function()
+    qp.Visible = not qp.Visible
+    if qp.Visible then renderQuests() end
+end)
+
+-- refresh while open (progress ticks with play time)
+task.spawn(function()
+    while alive() do
+        if qp.Visible then renderQuests(); task.wait(5) else task.wait(0.5) end
+    end
+end)
+
 -- apply active language to every static label + re-render open panels
 applyLang = function()
     for _, f in ipairs(langUpdaters) do pcall(f) end
@@ -1369,6 +1559,8 @@ applyLang = function()
     searchBox.PlaceholderText = tr("search")
     spBtn.Text      = tr("spbtn")
     spTitle.Text    = tr("sptitle")
+    questBtn.Text   = tr("questbtn")
+    if qp.Visible then renderQuests() end
     if yearChips["ALL"] then yearChips["ALL"].Text = tr("allchip") end
     if posChips["ALL"] then posChips["ALL"].Text = tr("allchip") end
     -- re-render panels so country names + dynamic text switch language
@@ -1386,6 +1578,7 @@ UserInput.InputBegan:Connect(function(i, gpe)
         cat.Visible = false
         br.Visible = false
         sp.Visible = false
+        qp.Visible = false
     end
 end)
 
