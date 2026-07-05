@@ -1577,7 +1577,13 @@ do
 end
 
 local TeleportService = game:GetService("TeleportService")
-local RELOADER = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/chnwax/Script2/main/Build%20A%20Soccer%20Squad.lua"))()'
+-- reloader: re-fetch script from repo after teleport, then re-arm auto roll +
+-- auto-reconnect so the quest cycle keeps looping (fresh load defaults them off).
+local RELOADER = table.concat({
+    'loadstring(game:HttpGet("https://raw.githubusercontent.com/chnwax/Script2/main/Build%20A%20Soccer%20Squad.lua"))()',
+    'task.wait(8)',
+    'if getgenv().SSAuto then getgenv().SSAuto.on = true getgenv().SSAuto.reQuest = true end',
+}, "\n")
 local reconnecting = false
 local function doReconnect()
     if reconnecting then return end
