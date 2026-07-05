@@ -318,6 +318,42 @@ local PL = {
 }
 local function plName(c) return PL[c] or c end
 
+--==================== i18n (PL / EN) ====================
+State.lang = State.lang or "PL"
+local STR = {
+    PL = {
+        cash = "Kasa", autoroll = "Auto Roll", autobuy = "Auto Buy (sklep)",
+        fps = "FPS Mode", lang = "Jezyk (PL)", hidehint = "[RShift schowaj]",
+        catbtn = "Karty (losowana druzyna)", cattitle = "Losowana druzyna",
+        noroll = "brak rolla", clickroll = "kliknij Roll w grze",
+        openpos = "wolne pozycje: ", full = "brak (pelna)",
+        noopen = "brak graczy na wolnych pozycjach",
+        browsebtn = "Wszystkie karty", browsetitle = "Wszystkie karty",
+        search = "szukaj kraju...", pickcountry = "wybierz kraj",
+        cards = "kart", allyears = "wszystkie lata", allchip = "Wsz",
+        spbtn = "Karty specjalne (sklep)", sptitle = "Karty specjalne",
+        spno = "SpecialCards niedostepne", own = "MAM",
+        have = "masz", last = "last", buy = "kup",
+    },
+    EN = {
+        cash = "Cash", autoroll = "Auto Roll", autobuy = "Auto Buy (shop)",
+        fps = "FPS Mode", lang = "Language (EN)", hidehint = "[RShift hide]",
+        catbtn = "Cards (rolled team)", cattitle = "Rolled team",
+        noroll = "no roll", clickroll = "click Roll in game",
+        openpos = "open positions: ", full = "none (full)",
+        noopen = "no players on open positions",
+        browsebtn = "All cards", browsetitle = "All cards",
+        search = "search country...", pickcountry = "pick country",
+        cards = "cards", allyears = "all years", allchip = "All",
+        spbtn = "Special cards (shop)", sptitle = "Special cards",
+        spno = "SpecialCards unavailable", own = "OWN",
+        have = "have", last = "last", buy = "buy",
+    },
+}
+local function tr(k) return (STR[State.lang] or STR.PL)[k] or k end
+-- country display: Polish names in PL, raw English key in EN
+local function cName(c) return State.lang == "PL" and plName(c) or c end
+
 -- sorted lists for the browse-all panel (sorted by Polish display name)
 local countryNames, yearList = {}, {}
 do
@@ -563,7 +599,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(230, 296)
+main.Size = UDim2.fromOffset(230, 330)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -613,9 +649,13 @@ coinsLbl.Font = Enum.Font.GothamBold
 coinsLbl.TextSize = 14
 coinsLbl.Parent = main
 
+-- registry of functions that re-apply the current language to static labels
+local langUpdaters = {}
+
 -- toggle-row factory: builds a labeled switch at offset y; returns a setter
 -- that updates the visual state. onChange(newValue) fires on click.
-local function makeToggle(y, text, getVal, onChange)
+-- `key` is an i18n key; label text follows the active language.
+local function makeToggle(y, key, getVal, onChange)
     local holder = Instance.new("Frame")
     holder.Size = UDim2.new(1, -20, 0, 30)
     holder.Position = UDim2.fromOffset(10, y)
@@ -628,12 +668,13 @@ local function makeToggle(y, text, getVal, onChange)
     lbl.Size = UDim2.new(1, -50, 1, 0)
     lbl.Position = UDim2.fromOffset(10, 0)
     lbl.BackgroundTransparency = 1
-    lbl.Text = text
+    lbl.Text = tr(key)
     lbl.TextColor3 = Color3.fromRGB(225, 232, 228)
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Font = Enum.Font.Gotham
     lbl.TextSize = 13
     lbl.Parent = holder
+    langUpdaters[#langUpdaters + 1] = function() lbl.Text = tr(key) end
 
     local sw = Instance.new("TextButton")
     sw.Size = UDim2.fromOffset(34, 18)
@@ -663,16 +704,19 @@ local function makeToggle(y, text, getVal, onChange)
     return paint
 end
 
-makeToggle(56, "Auto Roll", function() return State.on end,
+local applyLang           -- forward decl (defined after render fns)
+makeToggle(56, "autoroll", function() return State.on end,
     function(v) State.on = v end)
-makeToggle(90, "Auto Buy (sklep)", function() return State.autoBuy end,
+makeToggle(90, "autobuy", function() return State.autoBuy end,
     function(v) State.autoBuy = v end)
-makeToggle(124, "FPS Mode", function() return State.fps end,
+makeToggle(124, "fps", function() return State.fps end,
     function(v) setFps(v) end)
+makeToggle(158, "lang", function() return State.lang == "EN" end,
+    function(v) State.lang = v and "EN" or "PL"; if applyLang then applyLang() end end)
 
 local status = Instance.new("TextLabel")
 status.Size = UDim2.new(1, -20, 0, 34)
-status.Position = UDim2.fromOffset(10, 160)
+status.Position = UDim2.fromOffset(10, 194)
 status.BackgroundTransparency = 1
 status.Text = "off  •  [RShift hide]"
 status.TextColor3 = Color3.fromRGB(150, 165, 155)
@@ -703,9 +747,9 @@ end
 
 local catBtn = Instance.new("TextButton")
 catBtn.Size = UDim2.new(1, -20, 0, 26)
-catBtn.Position = UDim2.fromOffset(10, 200)
+catBtn.Position = UDim2.fromOffset(10, 234)
 catBtn.BackgroundColor3 = BG2
-catBtn.Text = "Karty (losowana druzyna)"
+catBtn.Text = tr("catbtn")
 catBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
 catBtn.Font = Enum.Font.GothamSemibold
 catBtn.TextSize = 13
@@ -732,7 +776,7 @@ end
 local catTitle = Instance.new("TextLabel")
 catTitle.Size = UDim2.new(1, 0, 0, 28)
 catTitle.BackgroundTransparency = 1
-catTitle.Text = "Losowana druzyna"
+catTitle.Text = tr("cattitle")
 catTitle.TextColor3 = Color3.fromRGB(230, 240, 234)
 catTitle.Font = Enum.Font.GothamBold
 catTitle.TextSize = 15
@@ -799,15 +843,15 @@ local function renderTeam()
     local country, year = lastRoll.country, lastRoll.year
     local team = country and teamsCY[country] and teamsCY[country][year]
     if not team then
-        teamHeader.Text = "brak rolla"
-        openLabel.Text = "kliknij Roll w grze"
+        teamHeader.Text = tr("noroll")
+        openLabel.Text = tr("clickroll")
         cardScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
         return
     end
-    teamHeader.Text = string.format("%s  %s", plName(country), tostring(year))
+    teamHeader.Text = string.format("%s  %s", cName(country), tostring(year))
     local ops = {}
     for _, pk in ipairs(POS_ORDER) do if openPos[pk] == true then ops[#ops + 1] = pk end end
-    openLabel.Text = "wolne pozycje: " .. (#ops > 0 and table.concat(ops, ", ") or "brak (pelna)")
+    openLabel.Text = tr("openpos") .. (#ops > 0 and table.concat(ops, ", ") or tr("full"))
     local n = 0
     for _, p in ipairs(team) do
         if openPos[p.pos] == true then
@@ -832,7 +876,7 @@ local function renderTeam()
         row.Font = Enum.Font.Gotham
         row.TextSize = 12
         row.TextColor3 = Color3.fromRGB(150, 165, 155)
-        row.Text = "brak graczy na wolnych pozycjach"
+        row.Text = tr("noopen")
         row.Parent = cardScroll
         n = 1
     end
@@ -863,9 +907,9 @@ end)
 --==================== browse-all panel (all cards, filter by year) ====================
 local browseBtn = Instance.new("TextButton")
 browseBtn.Size = UDim2.new(1, -20, 0, 26)
-browseBtn.Position = UDim2.fromOffset(10, 230)
+browseBtn.Position = UDim2.fromOffset(10, 264)
 browseBtn.BackgroundColor3 = BG2
-browseBtn.Text = "Wszystkie karty"
+browseBtn.Text = tr("browsebtn")
 browseBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
 browseBtn.Font = Enum.Font.GothamSemibold
 browseBtn.TextSize = 13
@@ -890,7 +934,7 @@ end
 local brTitle = Instance.new("TextLabel")
 brTitle.Size = UDim2.new(1, 0, 0, 30)
 brTitle.BackgroundTransparency = 1
-brTitle.Text = "Wszystkie karty"
+brTitle.Text = tr("browsetitle")
 brTitle.TextColor3 = Color3.fromRGB(230, 240, 234)
 brTitle.Font = Enum.Font.GothamBold
 brTitle.TextSize = 15
@@ -915,7 +959,7 @@ searchBox.Size = UDim2.new(0, 130, 0, 24)
 searchBox.Position = UDim2.fromOffset(10, 38)
 searchBox.BackgroundColor3 = BG2
 searchBox.Text = ""
-searchBox.PlaceholderText = "szukaj kraju..."
+searchBox.PlaceholderText = tr("search")
 searchBox.PlaceholderColor3 = Color3.fromRGB(120, 132, 126)
 searchBox.TextColor3 = Color3.fromRGB(225, 232, 228)
 searchBox.Font = Enum.Font.Gotham
@@ -995,7 +1039,7 @@ local function renderBrowse()
         if c:IsA("TextLabel") then c:Destroy() end
     end
     if not brCountry or not teamsCY[brCountry] then
-        brHeader.Text = "wybierz kraj"
+        brHeader.Text = tr("pickcountry")
         brCardScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
         return
     end
@@ -1013,8 +1057,8 @@ local function renderBrowse()
         if a.ovr == b.ovr then return a.name < b.name end
         return a.ovr > b.ovr
     end)
-    brHeader.Text = string.format("%s  •  %d kart  (%s)", plName(brCountry), #rows,
-        selectedYear and tostring(selectedYear) or "wszystkie lata")
+    brHeader.Text = string.format("%s  •  %d %s  (%s)", cName(brCountry), #rows, tr("cards"),
+        selectedYear and tostring(selectedYear) or tr("allyears"))
     for i, p in ipairs(rows) do
         local row = Instance.new("TextLabel")
         row.Size = UDim2.new(1, -10, 0, 18)
@@ -1055,7 +1099,7 @@ do  -- build year chips once: "Wsz" + each year
             refreshChips(); renderBrowse()
         end)
     end
-    addChip("ALL", "Wsz", 0)
+    addChip("ALL", tr("allchip"), 0)
     for i, y in ipairs(yearList) do addChip(y, tostring(y), i) end
     refreshChips()
 end
@@ -1068,13 +1112,13 @@ local function buildBrowseCountries(query)
     local n = 0
     for _, country in ipairs(countryNames) do
         -- match Polish OR English name
-        if query == "" or plName(country):lower():find(query, 1, true)
+        if query == "" or cName(country):lower():find(query, 1, true)
                         or country:lower():find(query, 1, true) then
             n = n + 1
             local b = Instance.new("TextButton")
             b.Size = UDim2.new(1, -6, 0, 22)
             b.BackgroundColor3 = Color3.fromRGB(44, 52, 47)
-            b.Text = "  " .. plName(country)
+            b.Text = "  " .. cName(country)
             b.TextColor3 = Color3.fromRGB(215, 222, 218)
             b.TextXAlignment = Enum.TextXAlignment.Left
             b.Font = Enum.Font.Gotham
@@ -1106,9 +1150,9 @@ end)
 -- marking which you already own vs price/affordability. read-only view.
 local spBtn = Instance.new("TextButton")
 spBtn.Size = UDim2.new(1, -20, 0, 26)
-spBtn.Position = UDim2.fromOffset(10, 262)
+spBtn.Position = UDim2.fromOffset(10, 296)
 spBtn.BackgroundColor3 = BG2
-spBtn.Text = "Karty specjalne (sklep)"
+spBtn.Text = tr("spbtn")
 spBtn.TextColor3 = Color3.fromRGB(255, 150, 220)
 spBtn.Font = Enum.Font.GothamSemibold
 spBtn.TextSize = 13
@@ -1133,7 +1177,7 @@ end
 local spTitle = Instance.new("TextLabel")
 spTitle.Size = UDim2.new(1, 0, 0, 28)
 spTitle.BackgroundTransparency = 1
-spTitle.Text = "Karty specjalne"
+spTitle.Text = tr("sptitle")
 spTitle.TextColor3 = Color3.fromRGB(255, 190, 230)
 spTitle.Font = Enum.Font.GothamBold
 spTitle.TextSize = 15
@@ -1196,7 +1240,7 @@ local function renderSpecials()
         if c:IsA("TextLabel") then c:Destroy() end
     end
     if not SCmod then
-        spHeader.Text = "SpecialCards niedostepne"
+        spHeader.Text = tr("spno")
         return
     end
     local owned = fetchOwnedSpecials()
@@ -1223,7 +1267,7 @@ local function renderSpecials()
         if a.price ~= b.price then return a.price < b.price end
         return a.name < b.name
     end)
-    spHeader.Text = string.format("masz %d / %d  •  kasa %d", haveN, #rows, State.coins)
+    spHeader.Text = string.format("%s %d / %d  •  %s %d", tr("have"), haveN, #rows, tr("cash"), State.coins)
     for i, r in ipairs(rows) do
         local row = Instance.new("TextLabel")
         row.Size = UDim2.new(1, -10, 0, 20)
@@ -1234,7 +1278,7 @@ local function renderSpecials()
         local tail
         if r.own then
             row.TextColor3 = Color3.fromRGB(120, 220, 140)
-            tail = "MAM"
+            tail = tr("own")
         elseif r.price <= State.coins then
             row.TextColor3 = Color3.fromRGB(255, 205, 90)
             tail = string.format("%d $", r.price)
@@ -1263,6 +1307,25 @@ task.spawn(function()
     end
 end)
 
+-- apply active language to every static label + re-render open panels
+applyLang = function()
+    for _, f in ipairs(langUpdaters) do pcall(f) end
+    catBtn.Text     = tr("catbtn")
+    catTitle.Text   = tr("cattitle")
+    browseBtn.Text  = tr("browsebtn")
+    brTitle.Text    = tr("browsetitle")
+    searchBox.PlaceholderText = tr("search")
+    spBtn.Text      = tr("spbtn")
+    spTitle.Text    = tr("sptitle")
+    if yearChips["ALL"] then yearChips["ALL"].Text = tr("allchip") end
+    -- re-render panels so country names + dynamic text switch language
+    lastSig = ""
+    renderTeam()
+    buildBrowseCountries(searchBox.Text)
+    renderBrowse()
+    if sp.Visible then renderSpecials() end
+end
+
 UserInput.InputBegan:Connect(function(i, gpe)
     if gpe then return end
     if i.KeyCode == Enum.KeyCode.RightShift then
@@ -1275,9 +1338,9 @@ end)
 
 task.spawn(function()
     while alive() do
-        coinsLbl.Text = "Kasa: " .. tostring(State.coins)
-        local extra = State.autoBuy and State.lastBuy and ("\nkup: " .. State.lastBuy) or ""
-        status.Text = string.format("%s\nlast: %s%s", State.status, State.lastPick, extra)
+        coinsLbl.Text = tr("cash") .. ": " .. tostring(State.coins)
+        local extra = State.autoBuy and State.lastBuy and ("\n" .. tr("buy") .. ": " .. State.lastBuy) or ""
+        status.Text = string.format("%s\n%s: %s%s", State.status, tr("last"), State.lastPick, extra)
         task.wait(0.3)
     end
 end)
