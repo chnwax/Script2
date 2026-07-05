@@ -226,6 +226,9 @@ end)
 --==================== anti-AFK ====================
 -- Roblox kicks idle players (~20 min). On the Idled signal, poke the
 -- VirtualUser so the server sees activity. Guarded + de-duped across re-exec.
+-- NOTE: do NOT use VirtualUser:CaptureController() — it hijacks the input
+-- controller and blocks real mouse clicks (game buttons stop responding until
+-- rejoin). A right-button pulse (Button2Down/Up) resets idle without capturing.
 do
     local ok, VirtualUser = pcall(game.GetService, game, "VirtualUser")
     if ok and VirtualUser then
@@ -234,8 +237,13 @@ do
         end
         getgenv().__ssAntiAfk = plr.Idled:Connect(function()
             if not alive() then return end
-            VirtualUser:CaptureController()
-            VirtualUser:ClickButton2(Vector2.new())
+            local cam = workspace.CurrentCamera
+            local cf = (cam and cam.CFrame) or CFrame.new()
+            pcall(function()
+                VirtualUser:Button2Down(Vector2.new(0, 0), cf)
+                task.wait(0.1)
+                VirtualUser:Button2Up(Vector2.new(0, 0), cf)
+            end)
         end)
     end
 end
