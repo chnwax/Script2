@@ -1002,10 +1002,23 @@ do
     g.SortOrder = Enum.SortOrder.LayoutOrder
 end
 
+-- position filter chips (below year chips)
+local posBar = Instance.new("Frame")
+posBar.Size = UDim2.new(1, -160, 0, 20)
+posBar.Position = UDim2.fromOffset(150, 84)
+posBar.BackgroundTransparency = 1
+posBar.Parent = br
+do
+    local g = Instance.new("UIGridLayout", posBar)
+    g.CellSize = UDim2.fromOffset(46, 18)
+    g.CellPadding = UDim2.fromOffset(3, 3)
+    g.SortOrder = Enum.SortOrder.LayoutOrder
+end
+
 -- right: header + cards
 local brHeader = Instance.new("TextLabel")
 brHeader.Size = UDim2.new(1, -160, 0, 20)
-brHeader.Position = UDim2.fromOffset(150, 86)
+brHeader.Position = UDim2.fromOffset(150, 108)
 brHeader.BackgroundTransparency = 1
 brHeader.Text = "wybierz kraj"
 brHeader.TextColor3 = ACCENT
@@ -1015,8 +1028,8 @@ brHeader.TextSize = 13
 brHeader.Parent = br
 
 local brCardScroll = Instance.new("ScrollingFrame")
-brCardScroll.Size = UDim2.new(1, -160, 1, -120)
-brCardScroll.Position = UDim2.fromOffset(150, 108)
+brCardScroll.Size = UDim2.new(1, -160, 1, -142)
+brCardScroll.Position = UDim2.fromOffset(150, 130)
 brCardScroll.BackgroundColor3 = BG2
 brCardScroll.BorderSizePixel = 0
 brCardScroll.ScrollBarThickness = 4
@@ -1032,7 +1045,9 @@ end
 
 local brCountry                 -- selected country
 local selectedYear = nil        -- nil = all years
+local selectedPos = nil         -- nil = all positions
 local yearChips = {}
+local posChips = {}
 
 local function renderBrowse()
     for _, c in ipairs(brCardScroll:GetChildren()) do
@@ -1052,6 +1067,11 @@ local function renderBrowse()
             local l = teamsCY[brCountry][y]
             if l then for _, p in ipairs(l) do rows[#rows + 1] = { ovr = p.ovr, pos = p.pos, name = p.name, year = y, special = p.special } end end
         end
+    end
+    if selectedPos then
+        local f = {}
+        for _, r in ipairs(rows) do if r.pos == selectedPos then f[#f + 1] = r end end
+        rows = f
     end
     table.sort(rows, function(a, b)
         if a.ovr == b.ovr then return a.name < b.name end
@@ -1102,6 +1122,38 @@ do  -- build year chips once: "Wsz" + each year
     addChip("ALL", tr("allchip"), 0)
     for i, y in ipairs(yearList) do addChip(y, tostring(y), i) end
     refreshChips()
+end
+
+local function refreshPosChips()
+    for key, btn in pairs(posChips) do
+        local on = (key == "ALL" and selectedPos == nil) or (key == selectedPos)
+        btn.BackgroundColor3 = on and ACCENT or Color3.fromRGB(44, 52, 47)
+        btn.TextColor3 = on and Color3.fromRGB(18, 26, 20) or Color3.fromRGB(215, 222, 218)
+    end
+end
+
+do  -- build position chips: All + GK/DEF/MID/FWD
+    local function addPos(key, text, order)
+        local b = Instance.new("TextButton")
+        b.Text = text
+        b.Font = Enum.Font.GothamSemibold
+        b.TextSize = 11
+        b.AutoButtonColor = true
+        b.LayoutOrder = order
+        b.Parent = posBar
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+        posChips[key] = b
+        b.MouseButton1Click:Connect(function()
+            if key == "ALL" then selectedPos = nil else selectedPos = key end
+            refreshPosChips(); renderBrowse()
+        end)
+    end
+    addPos("ALL", tr("allchip"), 0)
+    addPos("GK", "GK", 1)
+    addPos("DEF", "DEF", 2)
+    addPos("MID", "MID", 3)
+    addPos("FWD", "FWD", 4)
+    refreshPosChips()
 end
 
 local function buildBrowseCountries(query)
@@ -1318,6 +1370,7 @@ applyLang = function()
     spBtn.Text      = tr("spbtn")
     spTitle.Text    = tr("sptitle")
     if yearChips["ALL"] then yearChips["ALL"].Text = tr("allchip") end
+    if posChips["ALL"] then posChips["ALL"].Text = tr("allchip") end
     -- re-render panels so country names + dynamic text switch language
     lastSig = ""
     renderTeam()
