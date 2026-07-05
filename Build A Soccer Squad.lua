@@ -563,7 +563,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(230, 262)
+main.Size = UDim2.fromOffset(230, 296)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -1101,12 +1101,175 @@ browseBtn.MouseButton1Click:Connect(function()
     end
 end)
 
+--==================== special cards panel (shop specials + owned) ====================
+-- lists every coin-buyable special (gated + coinPrice) across the whole catalog,
+-- marking which you already own vs price/affordability. read-only view.
+local spBtn = Instance.new("TextButton")
+spBtn.Size = UDim2.new(1, -20, 0, 26)
+spBtn.Position = UDim2.fromOffset(10, 262)
+spBtn.BackgroundColor3 = BG2
+spBtn.Text = "Karty specjalne (sklep)"
+spBtn.TextColor3 = Color3.fromRGB(255, 150, 220)
+spBtn.Font = Enum.Font.GothamSemibold
+spBtn.TextSize = 13
+spBtn.AutoButtonColor = true
+spBtn.Parent = main
+Instance.new("UICorner", spBtn).CornerRadius = UDim.new(0, 8)
+
+local sp = Instance.new("Frame")
+sp.Size = UDim2.fromOffset(340, 430)
+sp.Position = UDim2.new(0.5, -170, 0.5, -215)
+sp.BackgroundColor3 = BG
+sp.BorderSizePixel = 0
+sp.Active = true
+sp.Visible = false
+sp.Parent = gui
+Instance.new("UICorner", sp).CornerRadius = UDim.new(0, 10)
+do
+    local s = Instance.new("UIStroke", sp)
+    s.Color = Color3.fromRGB(255, 150, 220); s.Thickness = 1.5; s.Transparency = 0.3
+end
+
+local spTitle = Instance.new("TextLabel")
+spTitle.Size = UDim2.new(1, 0, 0, 28)
+spTitle.BackgroundTransparency = 1
+spTitle.Text = "Karty specjalne"
+spTitle.TextColor3 = Color3.fromRGB(255, 190, 230)
+spTitle.Font = Enum.Font.GothamBold
+spTitle.TextSize = 15
+spTitle.Parent = sp
+makeDraggable(sp, spTitle)
+
+local spClose = Instance.new("TextButton")
+spClose.Size = UDim2.fromOffset(24, 24)
+spClose.Position = UDim2.new(1, -30, 0, 4)
+spClose.BackgroundColor3 = Color3.fromRGB(70, 46, 46)
+spClose.Text = "X"
+spClose.TextColor3 = Color3.fromRGB(240, 210, 210)
+spClose.Font = Enum.Font.GothamBold
+spClose.TextSize = 13
+spClose.Parent = sp
+Instance.new("UICorner", spClose).CornerRadius = UDim.new(0, 6)
+spClose.MouseButton1Click:Connect(function() sp.Visible = false end)
+
+local spHeader = Instance.new("TextLabel")
+spHeader.Size = UDim2.new(1, -20, 0, 18)
+spHeader.Position = UDim2.fromOffset(12, 34)
+spHeader.BackgroundTransparency = 1
+spHeader.Text = "-"
+spHeader.TextColor3 = Color3.fromRGB(255, 150, 220)
+spHeader.TextXAlignment = Enum.TextXAlignment.Left
+spHeader.Font = Enum.Font.GothamSemibold
+spHeader.TextSize = 12
+spHeader.Parent = sp
+
+local spScroll = Instance.new("ScrollingFrame")
+spScroll.Size = UDim2.new(1, -20, 1, -66)
+spScroll.Position = UDim2.fromOffset(10, 56)
+spScroll.BackgroundColor3 = BG2
+spScroll.BorderSizePixel = 0
+spScroll.ScrollBarThickness = 4
+spScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+spScroll.Parent = sp
+Instance.new("UICorner", spScroll).CornerRadius = UDim.new(0, 8)
+do
+    local l = Instance.new("UIListLayout", spScroll)
+    l.Padding = UDim.new(0, 1); l.SortOrder = Enum.SortOrder.LayoutOrder
+    local pad = Instance.new("UIPadding", spScroll)
+    pad.PaddingLeft = UDim.new(0, 8); pad.PaddingTop = UDim.new(0, 4)
+end
+
+-- fetch owned-specials set (key "year:country:baseName" = true)
+local function fetchOwnedSpecials()
+    local owned = {}
+    if RequestUnlockedSpecials then
+        pcall(function()
+            local s = RequestUnlockedSpecials:InvokeServer()
+            if type(s) == "table" then owned = s end
+        end)
+    end
+    return owned
+end
+
+local function renderSpecials()
+    for _, c in ipairs(spScroll:GetChildren()) do
+        if c:IsA("TextLabel") then c:Destroy() end
+    end
+    if not SCmod then
+        spHeader.Text = "SpecialCards niedostepne"
+        return
+    end
+    local owned = fetchOwnedSpecials()
+    fetchCoins()
+    local rows, haveN = {}, 0
+    for year, byCountry in pairs(SCmod.Specials) do
+        for country, byBase in pairs(byCountry) do
+            for baseName, def in pairs(byBase) do
+                if type(def) == "table" and def.gated and def.coinPrice then
+                    local key = tostring(year) .. ":" .. country .. ":" .. baseName
+                    local own = owned[key] == true
+                    if own then haveN = haveN + 1 end
+                    rows[#rows + 1] = {
+                        name = baseName, country = country, year = year,
+                        ovr = def.ovr or 0, price = def.coinPrice, own = own,
+                    }
+                end
+            end
+        end
+    end
+    -- sort: owned first, then cheapest price, then name
+    table.sort(rows, function(a, b)
+        if a.own ~= b.own then return a.own end
+        if a.price ~= b.price then return a.price < b.price end
+        return a.name < b.name
+    end)
+    spHeader.Text = string.format("masz %d / %d  •  kasa %d", haveN, #rows, State.coins)
+    for i, r in ipairs(rows) do
+        local row = Instance.new("TextLabel")
+        row.Size = UDim2.new(1, -10, 0, 20)
+        row.BackgroundTransparency = 1
+        row.Font = Enum.Font.RobotoMono
+        row.TextSize = 12
+        row.TextXAlignment = Enum.TextXAlignment.Left
+        local tail
+        if r.own then
+            row.TextColor3 = Color3.fromRGB(120, 220, 140)
+            tail = "MAM"
+        elseif r.price <= State.coins then
+            row.TextColor3 = Color3.fromRGB(255, 205, 90)
+            tail = string.format("%d $", r.price)
+        else
+            row.TextColor3 = Color3.fromRGB(210, 120, 120)
+            tail = string.format("%d $", r.price)
+        end
+        row.Text = string.format("%3d  %-12s %s  %s",
+            r.ovr, string.sub(tostring(r.name), 1, 12),
+            "'" .. string.sub(tostring(r.year), -2), tail)
+        row.LayoutOrder = i
+        row.Parent = spScroll
+    end
+    spScroll.CanvasSize = UDim2.new(0, 0, 0, #rows * 21 + 8)
+end
+
+spBtn.MouseButton1Click:Connect(function()
+    sp.Visible = not sp.Visible
+    if sp.Visible then renderSpecials() end
+end)
+
+-- refresh while open (owned/coins change as auto-buy runs)
+task.spawn(function()
+    while alive() do
+        if sp.Visible then renderSpecials(); task.wait(2) else task.wait(0.5) end
+    end
+end)
+
 UserInput.InputBegan:Connect(function(i, gpe)
     if gpe then return end
     if i.KeyCode == Enum.KeyCode.RightShift then
         main.Visible = not main.Visible
         cat.Visible = false
         br.Visible = false
+        sp.Visible = false
     end
 end)
 
