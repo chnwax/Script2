@@ -617,7 +617,10 @@ main.Size = UDim2.fromOffset(230, 430)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
-main.Active = true
+-- Active=false so the frame's EMPTY areas don't sink clicks meant for game
+-- buttons underneath (CoreGui renders above PlayerGui). Only the title bar
+-- (drag handle) + the actual TextButtons/switches capture input.
+main.Active = false
 main.Parent = gui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
 local stroke = Instance.new("UIStroke", main)
@@ -626,6 +629,7 @@ stroke.Color = ACCENT; stroke.Thickness = 1.5; stroke.Transparency = 0.3
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 30)
 title.BackgroundTransparency = 1
+title.Active = true      -- drag handle: only this 30px strip sinks input
 title.Text = "Soccer Squad Auto-Roll"
 title.TextColor3 = Color3.fromRGB(230, 240, 234)
 title.Font = Enum.Font.GothamBold
@@ -795,7 +799,7 @@ cat.Size = UDim2.fromOffset(300, 400)
 cat.Position = UDim2.new(0.5, -150, 0.5, -200)
 cat.BackgroundColor3 = BG
 cat.BorderSizePixel = 0
-cat.Active = true
+cat.Active = false
 cat.Visible = false
 cat.Parent = gui
 Instance.new("UICorner", cat).CornerRadius = UDim.new(0, 10)
@@ -805,6 +809,7 @@ do
 end
 
 local catTitle = Instance.new("TextLabel")
+catTitle.Active = true
 catTitle.Size = UDim2.new(1, 0, 0, 28)
 catTitle.BackgroundTransparency = 1
 catTitle.Text = tr("cattitle")
@@ -953,7 +958,7 @@ br.Size = UDim2.fromOffset(430, 430)
 br.Position = UDim2.new(0.5, -215, 0.5, -215)
 br.BackgroundColor3 = BG
 br.BorderSizePixel = 0
-br.Active = true
+br.Active = false
 br.Visible = false
 br.Parent = gui
 Instance.new("UICorner", br).CornerRadius = UDim.new(0, 10)
@@ -963,6 +968,7 @@ do
 end
 
 local brTitle = Instance.new("TextLabel")
+brTitle.Active = true
 brTitle.Size = UDim2.new(1, 0, 0, 30)
 brTitle.BackgroundTransparency = 1
 brTitle.Text = tr("browsetitle")
@@ -1248,7 +1254,7 @@ sp.Size = UDim2.fromOffset(340, 430)
 sp.Position = UDim2.new(0.5, -170, 0.5, -215)
 sp.BackgroundColor3 = BG
 sp.BorderSizePixel = 0
-sp.Active = true
+sp.Active = false
 sp.Visible = false
 sp.Parent = gui
 Instance.new("UICorner", sp).CornerRadius = UDim.new(0, 10)
@@ -1258,6 +1264,7 @@ do
 end
 
 local spTitle = Instance.new("TextLabel")
+spTitle.Active = true
 spTitle.Size = UDim2.new(1, 0, 0, 28)
 spTitle.BackgroundTransparency = 1
 spTitle.Text = tr("sptitle")
@@ -1410,7 +1417,7 @@ qp.Size = UDim2.fromOffset(320, 300)
 qp.Position = UDim2.new(0.5, -160, 0.5, -150)
 qp.BackgroundColor3 = BG
 qp.BorderSizePixel = 0
-qp.Active = true
+qp.Active = false
 qp.Visible = false
 qp.Parent = gui
 Instance.new("UICorner", qp).CornerRadius = UDim.new(0, 10)
@@ -1420,6 +1427,7 @@ do
 end
 
 local qpTitle = Instance.new("TextLabel")
+qpTitle.Active = true
 qpTitle.Size = UDim2.new(1, 0, 0, 28)
 qpTitle.BackgroundTransparency = 1
 qpTitle.Text = tr("questtitle")
