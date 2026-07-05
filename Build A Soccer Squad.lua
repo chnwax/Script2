@@ -382,13 +382,14 @@ if CoinsUpdate then
     end)
 end
 
--- auto-buy loop: while enabled, unlock any affordable, not-yet-owned SPECIAL
--- PLAYER (cheapest first). we scan the WHOLE SpecialCards catalog, not just the
--- 4 rotating featured cards, so we grab every coin-priced player we can afford.
+-- auto-buy loop: while enabled, poll the CURRENT shop and unlock any affordable,
+-- not-yet-owned featured PLAYER (cheapest first). the server only accepts players
+-- that are in the current featured rotation, so we buy from shop.featured only.
 -- ONLY players (PurchasePlayerUnlock) -- never teams.
 task.spawn(function()
     while alive() do
-        if State.autoBuy and SCmod and PurchasePlayerUnlock then
+        if State.autoBuy and RequestPrimeShop and PurchasePlayerUnlock then
+            local ok, shop = pcall(function() return RequestPrimeShop:InvokeServer() end)
             local owned = {}
             if RequestUnlockedSpecials then
                 pcall(function()
@@ -396,35 +397,32 @@ task.spawn(function()
                     if type(s) == "table" then owned = s end
                 end)
             end
-            fetchCoins()
-            -- collect every unowned, coin-priced special player
-            local buyable = {}
-            pcall(function()
-                for year, byCountry in pairs(SCmod.Specials) do
-                    for country, byBase in pairs(byCountry) do
-                        for baseName, def in pairs(byBase) do
-                            local price = type(def) == "table" and def.coinPrice or nil
-                            local key = tostring(year) .. ":" .. country .. ":" .. baseName
-                            if price and not owned[key] then
-                                buyable[#buyable + 1] =
-                                    { year = year, country = country, baseName = baseName, price = price }
-                            end
+            if ok and type(shop) == "table" and type(shop.featured) == "table" then
+                fetchCoins()
+                local buyable = {}
+                for _, f in ipairs(shop.featured) do
+                    if type(f) == "table" and f.baseName and f.year and f.country then
+                        local key = tostring(f.year) .. ":" .. f.country .. ":" .. f.baseName
+                        local price = priceOf(f.year, f.country, f.baseName)
+                        if not owned[key] and price and price <= State.coins then
+                            buyable[#buyable + 1] = { f = f, price = price }
                         end
                     end
                 end
-            end)
-            table.sort(buyable, function(a, b) return a.price < b.price end)
-            for _, b in ipairs(buyable) do
-                if not (alive() and State.autoBuy) then break end
-                if b.price <= State.coins then
-                    local okp = pcall(function()
-                        return PurchasePlayerUnlock:InvokeServer(b.year, b.country, b.baseName)
-                    end)
-                    if okp then
-                        State.coins = State.coins - b.price
-                        State.lastBuy = string.format("%s (%d)", b.baseName, b.price)
+                table.sort(buyable, function(a, b) return a.price < b.price end)
+                for _, b in ipairs(buyable) do
+                    if not (alive() and State.autoBuy) then break end
+                    if b.price <= State.coins then
+                        local f = b.f
+                        local okp, res = pcall(function()
+                            return PurchasePlayerUnlock:InvokeServer(f.year, f.country, f.baseName)
+                        end)
+                        if okp and res then
+                            State.coins = State.coins - b.price
+                            State.lastBuy = string.format("%s (%d)", f.baseName, b.price)
+                        end
+                        task.wait(0.4)
                     end
-                    task.wait(0.4)
                 end
             end
             task.wait(2)
