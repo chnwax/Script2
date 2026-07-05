@@ -107,7 +107,7 @@ local function waitAny(map, timeout)
 end
 
 --==================== state ====================
-local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0, reQuest = false }
+local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0, reQuest = false, persist = false }
 getgenv().SSAuto = State   -- external control/inspection: getgenv().SSAuto.on = true
 
 local ALL_OPEN = { GK = true, DEF = true, MID = true, FWD = true }
@@ -339,6 +339,7 @@ local STR = {
         questclaimed = "ODEBRANE", questreward = "nagroda",
         questmin = "min", questplayed = "grasz",
         request = "Auto reconnect (questy)",
+        persist = "Zapamietaj opcje (reconnect)",
     },
     EN = {
         cash = "Cash", autoroll = "Auto Roll", autobuy = "Auto Buy (shop)",
@@ -358,6 +359,7 @@ local STR = {
         questclaimed = "CLAIMED", questreward = "reward",
         questmin = "min", questplayed = "played",
         request = "Auto reconnect (quests)",
+        persist = "Remember options (reconnect)",
     },
 }
 local function tr(k) return (STR[State.lang] or STR.PL)[k] or k end
@@ -611,7 +613,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(230, 396)
+main.Size = UDim2.fromOffset(230, 430)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -717,20 +719,35 @@ local function makeToggle(y, key, getVal, onChange)
 end
 
 local applyLang           -- forward decl (defined after render fns)
-makeToggle(56, "autoroll", function() return State.on end,
+local paintRoll = makeToggle(56, "autoroll", function() return State.on end,
     function(v) State.on = v end)
-makeToggle(90, "autobuy", function() return State.autoBuy end,
+local paintBuy = makeToggle(90, "autobuy", function() return State.autoBuy end,
     function(v) State.autoBuy = v end)
-makeToggle(124, "fps", function() return State.fps end,
+local paintFps = makeToggle(124, "fps", function() return State.fps end,
     function(v) setFps(v) end)
 makeToggle(158, "lang", function() return State.lang == "EN" end,
     function(v) State.lang = v and "EN" or "PL"; if applyLang then applyLang() end end)
-makeToggle(192, "request", function() return State.reQuest end,
+local paintReq = makeToggle(192, "request", function() return State.reQuest end,
     function(v) State.reQuest = v end)
+local paintPersist = makeToggle(226, "persist", function() return State.persist end,
+    function(v) State.persist = v end)
+
+-- restore toggle states after a teleport reload (called by the queued reloader).
+-- applies the exact options that were on before the reconnect; fps needs setFps()
+-- to re-apply the graphics stripping, the rest are plain State flags.
+getgenv().SSAuto.restore = function(o)
+    o = o or {}
+    State.on      = not not o.on
+    State.autoBuy = not not o.autoBuy
+    State.reQuest = not not o.reQuest
+    State.persist = not not o.persist
+    pcall(paintRoll); pcall(paintBuy); pcall(paintReq); pcall(paintPersist)
+    if o.fps then setFps(true); pcall(paintFps) end
+end
 
 local status = Instance.new("TextLabel")
 status.Size = UDim2.new(1, -20, 0, 34)
-status.Position = UDim2.fromOffset(10, 228)
+status.Position = UDim2.fromOffset(10, 262)
 status.BackgroundTransparency = 1
 status.Text = "off  •  [RShift hide]"
 status.TextColor3 = Color3.fromRGB(150, 165, 155)
@@ -761,7 +778,7 @@ end
 
 local catBtn = Instance.new("TextButton")
 catBtn.Size = UDim2.new(1, -20, 0, 26)
-catBtn.Position = UDim2.fromOffset(10, 268)
+catBtn.Position = UDim2.fromOffset(10, 302)
 catBtn.BackgroundColor3 = BG2
 catBtn.Text = tr("catbtn")
 catBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
@@ -921,7 +938,7 @@ end)
 --==================== browse-all panel (all cards, filter by year) ====================
 local browseBtn = Instance.new("TextButton")
 browseBtn.Size = UDim2.new(1, -20, 0, 26)
-browseBtn.Position = UDim2.fromOffset(10, 298)
+browseBtn.Position = UDim2.fromOffset(10, 332)
 browseBtn.BackgroundColor3 = BG2
 browseBtn.Text = tr("browsebtn")
 browseBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
@@ -1216,7 +1233,7 @@ end)
 -- marking which you already own vs price/affordability. read-only view.
 local spBtn = Instance.new("TextButton")
 spBtn.Size = UDim2.new(1, -20, 0, 26)
-spBtn.Position = UDim2.fromOffset(10, 330)
+spBtn.Position = UDim2.fromOffset(10, 364)
 spBtn.BackgroundColor3 = BG2
 spBtn.Text = tr("spbtn")
 spBtn.TextColor3 = Color3.fromRGB(255, 150, 220)
@@ -1378,7 +1395,7 @@ end)
 --   claimed={ [id]=true, ... } }. progress = elapsed minutes since joinTime vs quest.minutes.
 local questBtn = Instance.new("TextButton")
 questBtn.Size = UDim2.new(1, -20, 0, 26)
-questBtn.Position = UDim2.fromOffset(10, 362)
+questBtn.Position = UDim2.fromOffset(10, 396)
 questBtn.BackgroundColor3 = BG2
 questBtn.Text = tr("questbtn")
 questBtn.TextColor3 = Color3.fromRGB(150, 205, 255)
@@ -1577,21 +1594,30 @@ do
 end
 
 local TeleportService = game:GetService("TeleportService")
--- reloader: re-fetch script from repo after teleport, then re-arm auto roll +
--- auto-reconnect so the quest cycle keeps looping (fresh load defaults them off).
-local RELOADER = table.concat({
-    'loadstring(game:HttpGet("https://raw.githubusercontent.com/chnwax/Script2/main/Build%20A%20Soccer%20Squad.lua"))()',
-    'task.wait(8)',
-    'if getgenv().SSAuto then getgenv().SSAuto.on = true getgenv().SSAuto.reQuest = true end',
-}, "\n")
+local RELOAD_URL = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/chnwax/Script2/main/Build%20A%20Soccer%20Squad.lua"))()'
 local reconnecting = false
+-- reloader: re-fetch script from repo after teleport, then restore options.
+-- if "persist" (Remember options) is on, restore the EXACT toggles that were
+-- enabled before the reconnect; otherwise keep only auto roll + auto reconnect
+-- alive so the quest cycle doesn't stall.
+local function buildReloader()
+    local restore
+    if State.persist then
+        restore = string.format(
+            'if getgenv().SSAuto and getgenv().SSAuto.restore then getgenv().SSAuto.restore({on=%s,autoBuy=%s,fps=%s,reQuest=true,persist=true}) end',
+            tostring(State.on), tostring(State.autoBuy), tostring(State.fps))
+    else
+        restore = 'if getgenv().SSAuto then getgenv().SSAuto.on = true getgenv().SSAuto.reQuest = true end'
+    end
+    return table.concat({ RELOAD_URL, 'task.wait(8)', restore }, "\n")
+end
 local function doReconnect()
     if reconnecting then return end
     reconnecting = true
     State.status = "reconnecting (quest done)"
     -- queue script to auto-run after teleport (executor global; several names)
     local qf = (syn and syn.queue_on_teleport) or queue_on_teleport or queueonteleport
-    if qf then pcall(qf, RELOADER) end
+    if qf then pcall(qf, buildReloader()) end
     pcall(function() TeleportService:Teleport(game.PlaceId, plr) end)
 end
 
