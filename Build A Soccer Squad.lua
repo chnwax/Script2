@@ -107,7 +107,7 @@ local function waitAny(map, timeout)
 end
 
 --==================== state ====================
-local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0 }
+local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0, reQuest = false }
 getgenv().SSAuto = State   -- external control/inspection: getgenv().SSAuto.on = true
 
 local ALL_OPEN = { GK = true, DEF = true, MID = true, FWD = true }
@@ -338,6 +338,7 @@ local STR = {
         questno = "questy niedostepne", questdone = "ZROBIONE",
         questclaimed = "ODEBRANE", questreward = "nagroda",
         questmin = "min", questplayed = "grasz",
+        request = "Auto reconnect (questy)",
     },
     EN = {
         cash = "Cash", autoroll = "Auto Roll", autobuy = "Auto Buy (shop)",
@@ -356,6 +357,7 @@ local STR = {
         questno = "quests unavailable", questdone = "DONE",
         questclaimed = "CLAIMED", questreward = "reward",
         questmin = "min", questplayed = "played",
+        request = "Auto reconnect (quests)",
     },
 }
 local function tr(k) return (STR[State.lang] or STR.PL)[k] or k end
@@ -402,6 +404,7 @@ local RequestPrimeShop       = Remotes:FindFirstChild("RequestPrimeShop")
 local RequestUnlockedSpecials= Remotes:FindFirstChild("RequestUnlockedSpecials")
 local PurchasePlayerUnlock   = Remotes:FindFirstChild("PurchasePlayerUnlock")
 local RequestQuestState      = Remotes:FindFirstChild("RequestQuestState")
+local QuestComplete          = Remotes:FindFirstChild("QuestComplete")
 local SCmod = nil
 pcall(function() SCmod = require(RS:WaitForChild("SpecialCards")) end)
 
@@ -608,7 +611,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(230, 362)
+main.Size = UDim2.fromOffset(230, 396)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -722,10 +725,12 @@ makeToggle(124, "fps", function() return State.fps end,
     function(v) setFps(v) end)
 makeToggle(158, "lang", function() return State.lang == "EN" end,
     function(v) State.lang = v and "EN" or "PL"; if applyLang then applyLang() end end)
+makeToggle(192, "request", function() return State.reQuest end,
+    function(v) State.reQuest = v end)
 
 local status = Instance.new("TextLabel")
 status.Size = UDim2.new(1, -20, 0, 34)
-status.Position = UDim2.fromOffset(10, 194)
+status.Position = UDim2.fromOffset(10, 228)
 status.BackgroundTransparency = 1
 status.Text = "off  •  [RShift hide]"
 status.TextColor3 = Color3.fromRGB(150, 165, 155)
@@ -756,7 +761,7 @@ end
 
 local catBtn = Instance.new("TextButton")
 catBtn.Size = UDim2.new(1, -20, 0, 26)
-catBtn.Position = UDim2.fromOffset(10, 234)
+catBtn.Position = UDim2.fromOffset(10, 268)
 catBtn.BackgroundColor3 = BG2
 catBtn.Text = tr("catbtn")
 catBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
@@ -916,7 +921,7 @@ end)
 --==================== browse-all panel (all cards, filter by year) ====================
 local browseBtn = Instance.new("TextButton")
 browseBtn.Size = UDim2.new(1, -20, 0, 26)
-browseBtn.Position = UDim2.fromOffset(10, 264)
+browseBtn.Position = UDim2.fromOffset(10, 298)
 browseBtn.BackgroundColor3 = BG2
 browseBtn.Text = tr("browsebtn")
 browseBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
@@ -1211,7 +1216,7 @@ end)
 -- marking which you already own vs price/affordability. read-only view.
 local spBtn = Instance.new("TextButton")
 spBtn.Size = UDim2.new(1, -20, 0, 26)
-spBtn.Position = UDim2.fromOffset(10, 296)
+spBtn.Position = UDim2.fromOffset(10, 330)
 spBtn.BackgroundColor3 = BG2
 spBtn.Text = tr("spbtn")
 spBtn.TextColor3 = Color3.fromRGB(255, 150, 220)
@@ -1373,7 +1378,7 @@ end)
 --   claimed={ [id]=true, ... } }. progress = elapsed minutes since joinTime vs quest.minutes.
 local questBtn = Instance.new("TextButton")
 questBtn.Size = UDim2.new(1, -20, 0, 26)
-questBtn.Position = UDim2.fromOffset(10, 328)
+questBtn.Position = UDim2.fromOffset(10, 362)
 questBtn.BackgroundColor3 = BG2
 questBtn.Text = tr("questbtn")
 questBtn.TextColor3 = Color3.fromRGB(150, 205, 255)
@@ -1548,6 +1553,53 @@ task.spawn(function()
         if qp.Visible then renderQuests(); task.wait(5) else task.wait(0.5) end
     end
 end)
+
+--==================== auto-reconnect after last quest ====================
+-- when the highest-minutes quest fires QuestComplete, rejoin the same place so
+-- quest progress resets and the cycle repeats. queue the loader on teleport so
+-- the script re-runs automatically after the reconnect (loops forever).
+-- last quest id = the quest with the most required minutes (play_120m by default).
+local lastQuestId = nil
+do
+    if RequestQuestState then
+        pcall(function()
+            local st = RequestQuestState:InvokeServer()
+            if type(st) == "table" and type(st.quests) == "table" then
+                local mx = -1
+                for _, q in pairs(st.quests) do
+                    if type(q) == "table" and q.id and q.minutes and q.minutes > mx then
+                        mx = q.minutes; lastQuestId = q.id
+                    end
+                end
+            end
+        end)
+    end
+end
+
+local TeleportService = game:GetService("TeleportService")
+local RELOADER = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/chnwax/Script2/main/Build%20A%20Soccer%20Squad.lua"))()'
+local reconnecting = false
+local function doReconnect()
+    if reconnecting then return end
+    reconnecting = true
+    State.status = "reconnecting (quest done)"
+    -- queue script to auto-run after teleport (executor global; several names)
+    local qf = (syn and syn.queue_on_teleport) or queue_on_teleport or queueonteleport
+    if qf then pcall(qf, RELOADER) end
+    pcall(function() TeleportService:Teleport(game.PlaceId, plr) end)
+end
+
+if QuestComplete then
+    QuestComplete.OnClientEvent:Connect(function(p)
+        if not alive() then return end
+        if State.reQuest and type(p) == "table" and p.id then
+            -- reconnect only on the LAST quest (or any if we couldn't detect it)
+            if lastQuestId == nil or p.id == lastQuestId then
+                doReconnect()
+            end
+        end
+    end)
+end
 
 -- apply active language to every static label + re-render open panels
 applyLang = function()
