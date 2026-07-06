@@ -755,11 +755,12 @@ local STR = {
         hunt = "Poluj OVR+ (reroll)",
         hunttgt = "Cel OVR (maks 120)",
         actbtn = "Akcje (reroll / refresh)", acttitle = "Akcje",
-        actmode = "Tryb", actreroll = "Reroll (nowa druzyna)", actrefresh = "Refresh (te same karty)",
+        actmode = "Tryb", actreroll = "Reroll", actrefresh = "Refresh",
         acttarget = "Cel", acttteam = "Kraj + Rok", acttovr = "OVR+ dowolny",
         actcountry = "Kraj", actyear = "Rok", actovr = "Cel OVR (maks 120)",
         actmax = "Maks uzyc (0 = bez limitu)", actstart = "START", actstop = "STOP",
         actidle = "gotowe",
+        tab_auto = "Auto", tab_act = "Akcje", tab_cards = "Karty", tab_quests = "Questy",
     },
     EN = {
         cash = "Cash", autoroll = "Auto Roll", autobuy = "Auto Buy (shop)",
@@ -783,11 +784,12 @@ local STR = {
         hunt = "Hunt OVR+ (reroll)",
         hunttgt = "Target OVR (max 120)",
         actbtn = "Actions (reroll / refresh)", acttitle = "Actions",
-        actmode = "Mode", actreroll = "Reroll (new team)", actrefresh = "Refresh (same cards)",
+        actmode = "Mode", actreroll = "Reroll", actrefresh = "Refresh",
         acttarget = "Target", acttteam = "Country + Year", acttovr = "Any OVR+",
         actcountry = "Country", actyear = "Year", actovr = "Target OVR (max 120)",
         actmax = "Max uses (0 = unlimited)", actstart = "START", actstop = "STOP",
         actidle = "ready",
+        tab_auto = "Auto", tab_act = "Actions", tab_cards = "Cards", tab_quests = "Quests",
     },
 }
 local function tr(k) return (STR[State.lang] or STR.PL)[k] or k end
@@ -1028,9 +1030,20 @@ local parent = gethui()
 local old = parent:FindFirstChild("SSAuto")
 if old then old:Destroy() end
 
-local ACCENT = Color3.fromRGB(60, 190, 120)
-local BG     = Color3.fromRGB(22, 26, 24)
-local BG2    = Color3.fromRGB(34, 40, 36)
+-- dark-minimal palette (shared with the popup panels below)
+local ACCENT = Color3.fromRGB(134, 154, 186)   -- muted slate-blue accent (selected/on)
+local BG     = Color3.fromRGB(19, 20, 23)       -- near-black panel background
+local BG2    = Color3.fromRGB(33, 35, 40)       -- row / input surface
+local TXT    = Color3.fromRGB(228, 231, 236)    -- primary text
+local SUB    = Color3.fromRGB(136, 142, 152)    -- secondary text
+local OFFCOL = Color3.fromRGB(52, 56, 63)       -- idle control (switch off)
+local STRK   = Color3.fromRGB(56, 60, 68)       -- hairline stroke
+
+local function corner(inst, r) Instance.new("UICorner", inst).CornerRadius = UDim.new(0, r or 8) end
+local function hairline(inst, c, t)
+    local s = Instance.new("UIStroke", inst); s.Color = c or STRK
+    s.Thickness = 1; s.Transparency = t or 0; return s
+end
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "SSAuto"
@@ -1039,27 +1052,25 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(230, 536)
-main.Position = UDim2.fromOffset(40, 220)
+main.Size = UDim2.fromOffset(280, 474)
+main.Position = UDim2.fromOffset(40, 160)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
--- Active=false so the frame's EMPTY areas don't sink clicks meant for game
--- buttons underneath (CoreGui renders above PlayerGui). Only the title bar
--- (drag handle) + the actual TextButtons/switches capture input.
+-- Active=false so empty areas don't sink clicks meant for game buttons underneath.
 main.Active = false
 main.Parent = gui
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
-local stroke = Instance.new("UIStroke", main)
-stroke.Color = ACCENT; stroke.Thickness = 1.5; stroke.Transparency = 0.3
+corner(main, 12); hairline(main)
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 30)
+title.Size = UDim2.new(1, -16, 0, 26)
+title.Position = UDim2.fromOffset(12, 6)
 title.BackgroundTransparency = 1
-title.Active = true      -- drag handle: only this 30px strip sinks input
-title.Text = "Soccer Squad Auto-Roll"
-title.TextColor3 = Color3.fromRGB(230, 240, 234)
+title.Active = true      -- drag handle
+title.Text = "Soccer Squad"
+title.TextColor3 = TXT
+title.TextXAlignment = Enum.TextXAlignment.Left
 title.Font = Enum.Font.GothamBold
-title.TextSize = 14
+title.TextSize = 15
 title.Parent = main
 
 do
@@ -1081,39 +1092,87 @@ do
     end)
 end
 
--- coins / cash label
+-- coins / cash label (header, right-aligned)
 local coinsLbl = Instance.new("TextLabel")
-coinsLbl.Size = UDim2.new(1, -20, 0, 20)
-coinsLbl.Position = UDim2.fromOffset(10, 32)
+coinsLbl.Size = UDim2.new(1, -16, 0, 26)
+coinsLbl.Position = UDim2.fromOffset(8, 6)
 coinsLbl.BackgroundTransparency = 1
 coinsLbl.Text = "Kasa: ..."
-coinsLbl.TextColor3 = Color3.fromRGB(255, 205, 90)
-coinsLbl.TextXAlignment = Enum.TextXAlignment.Left
-coinsLbl.Font = Enum.Font.GothamBold
-coinsLbl.TextSize = 14
+coinsLbl.TextColor3 = SUB
+coinsLbl.TextXAlignment = Enum.TextXAlignment.Right
+coinsLbl.Font = Enum.Font.GothamMedium
+coinsLbl.TextSize = 12
 coinsLbl.Parent = main
 
 -- registry of functions that re-apply the current language to static labels
 local langUpdaters = {}
+local applyLang           -- forward decl (defined after render fns)
 
--- toggle-row factory: builds a labeled switch at offset y; returns a setter
--- that updates the visual state. onChange(newValue) fires on click.
--- `key` is an i18n key; label text follows the active language.
-local function makeToggle(y, key, getVal, onChange)
+--==================== tab bar + pages ====================
+local TAB_DEFS = { { "auto", "tab_auto" }, { "act", "tab_act" }, { "cards", "tab_cards" }, { "quests", "tab_quests" } }
+local pages, tabBtns = {}, {}
+
+local tabbar = Instance.new("Frame")
+tabbar.Size = UDim2.new(1, -16, 0, 30)
+tabbar.Position = UDim2.fromOffset(8, 38)
+tabbar.BackgroundColor3 = BG2
+tabbar.BorderSizePixel = 0
+tabbar.Parent = main
+corner(tabbar, 8)
+
+local function showTab(name)
+    for k, pg in pairs(pages) do pg.Visible = (k == name) end
+    for k, b in pairs(tabBtns) do
+        local on = (k == name)
+        b.BackgroundColor3 = on and ACCENT or BG2
+        b.TextColor3 = on and Color3.fromRGB(18, 20, 24) or SUB
+    end
+end
+
+for i, t in ipairs(TAB_DEFS) do
+    local key, i18 = t[1], t[2]
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0.25, -4, 1, -6)
+    b.Position = UDim2.new(0.25 * (i - 1), 2, 0, 3)
+    b.BackgroundColor3 = BG2
+    b.Text = tr(i18)
+    b.TextColor3 = SUB
+    b.Font = Enum.Font.GothamSemibold
+    b.TextSize = 12
+    b.AutoButtonColor = false
+    b.Parent = tabbar
+    corner(b, 6)
+    b.MouseButton1Click:Connect(function() showTab(key) end)
+    tabBtns[key] = b
+    langUpdaters[#langUpdaters + 1] = function() b.Text = tr(i18) end
+
+    local pg = Instance.new("Frame")
+    pg.Size = UDim2.new(1, -16, 1, -98)
+    pg.Position = UDim2.fromOffset(8, 78)
+    pg.BackgroundTransparency = 1
+    pg.Active = false
+    pg.Visible = false
+    pg.Parent = main
+    pages[key] = pg
+end
+
+-- toggle-row factory: labeled switch at offset y inside `parentFrame`.
+-- returns a repaint fn; onChange(newValue) fires on click.
+local function makeToggle(parentFrame, y, key, getVal, onChange)
     local holder = Instance.new("Frame")
-    holder.Size = UDim2.new(1, -20, 0, 30)
-    holder.Position = UDim2.fromOffset(10, y)
+    holder.Size = UDim2.new(1, 0, 0, 30)
+    holder.Position = UDim2.fromOffset(0, y)
     holder.BackgroundColor3 = BG2
     holder.BorderSizePixel = 0
-    holder.Parent = main
-    Instance.new("UICorner", holder).CornerRadius = UDim.new(0, 8)
+    holder.Parent = parentFrame
+    corner(holder, 8)
 
     local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, -50, 1, 0)
-    lbl.Position = UDim2.fromOffset(10, 0)
+    lbl.Size = UDim2.new(1, -54, 1, 0)
+    lbl.Position = UDim2.fromOffset(12, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = tr(key)
-    lbl.TextColor3 = Color3.fromRGB(225, 232, 228)
+    lbl.TextColor3 = TXT
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Font = Enum.Font.Gotham
     lbl.TextSize = 13
@@ -1122,65 +1181,62 @@ local function makeToggle(y, key, getVal, onChange)
 
     local sw = Instance.new("TextButton")
     sw.Size = UDim2.fromOffset(34, 18)
-    sw.Position = UDim2.new(1, -42, 0.5, -9)
-    sw.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
+    sw.Position = UDim2.new(1, -46, 0.5, -9)
+    sw.BackgroundColor3 = OFFCOL
     sw.Text = ""; sw.AutoButtonColor = false
     sw.Parent = holder
     Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
     local knob = Instance.new("Frame")
     knob.Size = UDim2.fromOffset(14, 14)
     knob.Position = UDim2.fromOffset(2, 2)
-    knob.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
+    knob.BackgroundColor3 = Color3.fromRGB(238, 240, 244)
     knob.BorderSizePixel = 0
     knob.Parent = sw
     Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
     local function paint()
         local v = getVal()
-        sw.BackgroundColor3 = v and ACCENT or Color3.fromRGB(70, 76, 72)
+        sw.BackgroundColor3 = v and ACCENT or OFFCOL
         knob.Position = v and UDim2.fromOffset(18, 2) or UDim2.fromOffset(2, 2)
     end
-    sw.MouseButton1Click:Connect(function()
-        onChange(not getVal())
-        paint()
-    end)
+    sw.MouseButton1Click:Connect(function() onChange(not getVal()); paint() end)
     paint()
     return paint
 end
 
-local applyLang           -- forward decl (defined after render fns)
-paintRoll = makeToggle(56, "autoroll", function() return State.on end,
+--==================== AUTO tab ====================
+local pAuto = pages.auto
+paintRoll = makeToggle(pAuto, 0, "autoroll", function() return State.on end,
     function(v) State.on = v end)
-local paintBuy = makeToggle(90, "autobuy", function() return State.autoBuy end,
+local paintBuy = makeToggle(pAuto, 34, "autobuy", function() return State.autoBuy end,
     function(v) State.autoBuy = v end)
-local paintFps = makeToggle(124, "fps", function() return State.fps end,
+local paintFps = makeToggle(pAuto, 68, "fps", function() return State.fps end,
     function(v) setFps(v) end)
-makeToggle(158, "lang", function() return State.lang == "EN" end,
-    function(v) State.lang = v and "EN" or "PL"; if applyLang then applyLang() end end)
-local paintReq = makeToggle(192, "request", function() return State.reQuest end,
+local paintReq = makeToggle(pAuto, 102, "request", function() return State.reQuest end,
     function(v) State.reQuest = v end)
-local paintPersist = makeToggle(226, "persist", function() return State.persist end,
+local paintPersist = makeToggle(pAuto, 136, "persist", function() return State.persist end,
     function(v) State.persist = v end)
--- HUNT toggle (bottom row, below the panel buttons). On -> forces fill-loop off.
-paintHunt = makeToggle(430, "hunt", function() return State.hunt end,
+makeToggle(pAuto, 170, "lang", function() return State.lang == "EN" end,
+    function(v) State.lang = v and "EN" or "PL"; if applyLang then applyLang() end end)
+-- HUNT toggle. On -> forces fill-loop off.
+paintHunt = makeToggle(pAuto, 210, "hunt", function() return State.hunt end,
     function(v) State.hunt = v; if v then State.on = false; pcall(paintRoll) end end)
 
--- HUNT target OVR input: type a value, clamped to [80,120]. Drives State.huntTarget
--- (the OVR the hunt loop stops at). Default 103. Max 120.
+-- HUNT target OVR input (clamped 80..120, default 103).
 local htRow = Instance.new("Frame")
-htRow.Size = UDim2.new(1, -20, 0, 26)
-htRow.Position = UDim2.fromOffset(10, 464)
+htRow.Size = UDim2.new(1, 0, 0, 30)
+htRow.Position = UDim2.fromOffset(0, 244)
 htRow.BackgroundColor3 = BG2
 htRow.BorderSizePixel = 0
-htRow.Parent = main
-Instance.new("UICorner", htRow).CornerRadius = UDim.new(0, 8)
+htRow.Parent = pAuto
+corner(htRow, 8)
 
 local htLbl = Instance.new("TextLabel")
-htLbl.Size = UDim2.new(1, -74, 1, 0)
-htLbl.Position = UDim2.fromOffset(10, 0)
+htLbl.Size = UDim2.new(1, -80, 1, 0)
+htLbl.Position = UDim2.fromOffset(12, 0)
 htLbl.BackgroundTransparency = 1
 htLbl.Text = tr("hunttgt")
-htLbl.TextColor3 = Color3.fromRGB(225, 232, 228)
+htLbl.TextColor3 = TXT
 htLbl.TextXAlignment = Enum.TextXAlignment.Left
 htLbl.Font = Enum.Font.Gotham
 htLbl.TextSize = 13
@@ -1188,16 +1244,16 @@ htLbl.Parent = htRow
 langUpdaters[#langUpdaters + 1] = function() htLbl.Text = tr("hunttgt") end
 
 local htBox = Instance.new("TextBox")
-htBox.Size = UDim2.fromOffset(54, 20)
-htBox.Position = UDim2.new(1, -62, 0.5, -10)
-htBox.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
-htBox.TextColor3 = Color3.fromRGB(245, 245, 245)
+htBox.Size = UDim2.fromOffset(56, 22)
+htBox.Position = UDim2.new(1, -66, 0.5, -11)
+htBox.BackgroundColor3 = OFFCOL
+htBox.TextColor3 = TXT
 htBox.Font = Enum.Font.GothamBold
 htBox.TextSize = 13
 htBox.ClearTextOnFocus = false
 htBox.Text = tostring(State.huntTarget)
 htBox.Parent = htRow
-Instance.new("UICorner", htBox).CornerRadius = UDim.new(0, 6)
+corner(htBox, 6)
 
 htBox.FocusLost:Connect(function()
     local v = tonumber((htBox.Text:gsub("%D", "")))
@@ -1207,9 +1263,7 @@ htBox.FocusLost:Connect(function()
     htBox.Text = tostring(State.huntTarget)
 end)
 
--- restore toggle states after a teleport reload (called by the queued reloader).
--- applies the exact options that were on before the reconnect; fps needs setFps()
--- to re-apply the graphics stripping, the rest are plain State flags.
+-- restore toggle states after a teleport reload (queued reloader calls this).
 getgenv().SSAuto.restore = function(o)
     o = o or {}
     State.on      = not not o.on
@@ -1221,16 +1275,21 @@ getgenv().SSAuto.restore = function(o)
 end
 
 local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, -20, 0, 34)
-status.Position = UDim2.fromOffset(10, 262)
-status.BackgroundTransparency = 1
-status.Text = "off  •  [RShift hide]"
-status.TextColor3 = Color3.fromRGB(150, 165, 155)
+status.Size = UDim2.new(1, 0, 0, 78)
+status.Position = UDim2.fromOffset(0, 282)
+status.BackgroundColor3 = BG2
+status.BackgroundTransparency = 0.4
+status.Text = "off"
+status.TextColor3 = SUB
 status.Font = Enum.Font.Gotham
 status.TextSize = 12
 status.TextWrapped = true
+status.TextXAlignment = Enum.TextXAlignment.Left
 status.TextYAlignment = Enum.TextYAlignment.Top
-status.Parent = main
+status.Parent = pAuto
+corner(status, 8)
+do local p = Instance.new("UIPadding", status)
+   p.PaddingLeft = UDim.new(0, 10); p.PaddingTop = UDim.new(0, 6); p.PaddingRight = UDim.new(0, 8) end
 
 --==================== catalog button + panel ====================
 local function makeDraggable(frame, handle)
@@ -1252,16 +1311,16 @@ local function makeDraggable(frame, handle)
 end
 
 local catBtn = Instance.new("TextButton")
-catBtn.Size = UDim2.new(1, -20, 0, 26)
-catBtn.Position = UDim2.fromOffset(10, 302)
+catBtn.Size = UDim2.new(1, 0, 0, 32)
+catBtn.Position = UDim2.fromOffset(0, 0)
 catBtn.BackgroundColor3 = BG2
 catBtn.Text = tr("catbtn")
-catBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
+catBtn.TextColor3 = TXT
 catBtn.Font = Enum.Font.GothamSemibold
 catBtn.TextSize = 13
 catBtn.AutoButtonColor = true
-catBtn.Parent = main
-Instance.new("UICorner", catBtn).CornerRadius = UDim.new(0, 8)
+catBtn.Parent = pages.cards
+corner(catBtn, 8)
 
 -- panel: shows the exact team the current roll landed on (country + year),
 -- listing ONLY players whose position is still open on the pitch.
@@ -1413,16 +1472,16 @@ end)
 
 --==================== browse-all panel (all cards, filter by year) ====================
 local browseBtn = Instance.new("TextButton")
-browseBtn.Size = UDim2.new(1, -20, 0, 26)
-browseBtn.Position = UDim2.fromOffset(10, 332)
+browseBtn.Size = UDim2.new(1, 0, 0, 32)
+browseBtn.Position = UDim2.fromOffset(0, 38)
 browseBtn.BackgroundColor3 = BG2
 browseBtn.Text = tr("browsebtn")
-browseBtn.TextColor3 = Color3.fromRGB(225, 232, 228)
+browseBtn.TextColor3 = TXT
 browseBtn.Font = Enum.Font.GothamSemibold
 browseBtn.TextSize = 13
 browseBtn.AutoButtonColor = true
-browseBtn.Parent = main
-Instance.new("UICorner", browseBtn).CornerRadius = UDim.new(0, 8)
+browseBtn.Parent = pages.cards
+corner(browseBtn, 8)
 
 local br = Instance.new("Frame")
 br.Size = UDim2.fromOffset(430, 430)
@@ -1709,16 +1768,16 @@ end)
 -- lists every coin-buyable special (gated + coinPrice) across the whole catalog,
 -- marking which you already own vs price/affordability. read-only view.
 local spBtn = Instance.new("TextButton")
-spBtn.Size = UDim2.new(1, -20, 0, 26)
-spBtn.Position = UDim2.fromOffset(10, 364)
+spBtn.Size = UDim2.new(1, 0, 0, 32)
+spBtn.Position = UDim2.fromOffset(0, 76)
 spBtn.BackgroundColor3 = BG2
 spBtn.Text = tr("spbtn")
-spBtn.TextColor3 = Color3.fromRGB(255, 150, 220)
+spBtn.TextColor3 = TXT
 spBtn.Font = Enum.Font.GothamSemibold
 spBtn.TextSize = 13
 spBtn.AutoButtonColor = true
-spBtn.Parent = main
-Instance.new("UICorner", spBtn).CornerRadius = UDim.new(0, 8)
+spBtn.Parent = pages.cards
+corner(spBtn, 8)
 
 local sp = Instance.new("Frame")
 sp.Size = UDim2.fromOffset(340, 430)
@@ -1872,16 +1931,16 @@ end)
 -- RequestQuestState (RF) -> { joinTime, now, quests={["1"]={id,label,minutes,reward,rerolls,refreshes},...},
 --   claimed={ [id]=true, ... } }. progress = elapsed minutes since joinTime vs quest.minutes.
 local questBtn = Instance.new("TextButton")
-questBtn.Size = UDim2.new(1, -20, 0, 26)
-questBtn.Position = UDim2.fromOffset(10, 396)
+questBtn.Size = UDim2.new(1, 0, 0, 32)
+questBtn.Position = UDim2.fromOffset(0, 0)
 questBtn.BackgroundColor3 = BG2
 questBtn.Text = tr("questbtn")
-questBtn.TextColor3 = Color3.fromRGB(150, 205, 255)
+questBtn.TextColor3 = TXT
 questBtn.Font = Enum.Font.GothamSemibold
 questBtn.TextSize = 13
 questBtn.AutoButtonColor = true
-questBtn.Parent = main
-Instance.new("UICorner", questBtn).CornerRadius = UDim.new(0, 8)
+questBtn.Parent = pages.quests
+corner(questBtn, 8)
 
 local qp = Instance.new("Frame")
 qp.Size = UDim2.fromOffset(320, 300)
@@ -2116,57 +2175,20 @@ end
 -- opens a popup to configure + run a reroll/refresh campaign with a target and a
 -- max-uses cap. reroll = fresh team (target country+year OR OVR+); refresh = redraw
 -- the 4 cards on the same team (target OVR+). Stop button aborts anything.
-local actBtn = Instance.new("TextButton")
-actBtn.Size = UDim2.new(1, -20, 0, 26)
-actBtn.Position = UDim2.fromOffset(10, 498)
-actBtn.BackgroundColor3 = BG2
-actBtn.Text = tr("actbtn")
-actBtn.TextColor3 = Color3.fromRGB(255, 200, 120)
-actBtn.Font = Enum.Font.GothamSemibold
-actBtn.TextSize = 13
-actBtn.AutoButtonColor = true
-actBtn.Parent = main
-Instance.new("UICorner", actBtn).CornerRadius = UDim.new(0, 8)
-langUpdaters[#langUpdaters + 1] = function() actBtn.Text = tr("actbtn") end
-
+-- the action config lives embedded in the Akcje tab page (ap = transparent container).
 local ap = Instance.new("Frame")
-ap.Size = UDim2.fromOffset(264, 380)
-ap.Position = UDim2.new(0.5, -132, 0.5, -190)
-ap.BackgroundColor3 = BG
+ap.Size = UDim2.new(1, 0, 1, 0)
+ap.Position = UDim2.fromOffset(0, 0)
+ap.BackgroundTransparency = 1
 ap.BorderSizePixel = 0
 ap.Active = false
-ap.Visible = false
-ap.Parent = gui
-Instance.new("UICorner", ap).CornerRadius = UDim.new(0, 10)
-do local s = Instance.new("UIStroke", ap); s.Color = ACCENT; s.Thickness = 1.5; s.Transparency = 0.3 end
-
-local apTitle = Instance.new("TextLabel")
-apTitle.Active = true
-apTitle.Size = UDim2.new(1, 0, 0, 28)
-apTitle.BackgroundTransparency = 1
-apTitle.Text = tr("acttitle")
-apTitle.TextColor3 = Color3.fromRGB(230, 240, 234)
-apTitle.Font = Enum.Font.GothamBold
-apTitle.TextSize = 15
-apTitle.Parent = ap
-makeDraggable(ap, apTitle)
-langUpdaters[#langUpdaters + 1] = function() apTitle.Text = tr("acttitle") end
-
-local apClose = Instance.new("TextButton")
-apClose.Size = UDim2.fromOffset(24, 24)
-apClose.Position = UDim2.new(1, -30, 0, 4)
-apClose.BackgroundColor3 = Color3.fromRGB(70, 46, 46)
-apClose.Text = "X"; apClose.TextColor3 = Color3.fromRGB(240, 210, 210)
-apClose.Font = Enum.Font.GothamBold; apClose.TextSize = 13
-apClose.Parent = ap
-Instance.new("UICorner", apClose).CornerRadius = UDim.new(0, 6)
-apClose.MouseButton1Click:Connect(function() ap.Visible = false end)
+ap.Parent = pages.act
 
 -- small labeled row helper: returns the holder frame (controls parented into it)
 local function apRow(y, key, h)
     local holder = Instance.new("Frame")
-    holder.Size = UDim2.new(1, -20, 0, h or 28)
-    holder.Position = UDim2.fromOffset(10, y)
+    holder.Size = UDim2.new(1, 0, 0, h or 28)
+    holder.Position = UDim2.fromOffset(0, y)
     holder.BackgroundColor3 = BG2
     holder.BorderSizePixel = 0
     holder.Parent = ap
@@ -2189,12 +2211,13 @@ end
 -- a pair of segmented buttons (left/right) sharing a row; onPick(isLeft) fires.
 local function apSeg(holder, leftKey, rightKey, isLeftFn, onPick)
     local bl = Instance.new("TextButton")
-    bl.Size = UDim2.new(0.5, -6, 0, 22); bl.Position = UDim2.new(0, 88, 0.5, -11)
+    bl.Size = UDim2.new(0.5, -52, 0, 22); bl.Position = UDim2.new(0, 88, 0.5, -11)
     bl.Font = Enum.Font.GothamSemibold; bl.TextSize = 11
     bl.Text = tr(leftKey); bl.AutoButtonColor = false
     bl.Parent = holder; Instance.new("UICorner", bl).CornerRadius = UDim.new(0, 6)
     local br2 = Instance.new("TextButton")
-    br2.Size = UDim2.new(0.5, -12, 0, 22); br2.Position = UDim2.new(0.5, 42, 0.5, -11)
+    br2.AnchorPoint = Vector2.new(1, 0)
+    br2.Size = UDim2.new(0.5, -52, 0, 22); br2.Position = UDim2.new(1, -10, 0.5, -11)
     br2.Font = Enum.Font.GothamSemibold; br2.TextSize = 11
     br2.Text = tr(rightKey); br2.AutoButtonColor = false
     br2.Parent = holder; Instance.new("UICorner", br2).CornerRadius = UDim.new(0, 6)
@@ -2344,15 +2367,10 @@ langUpdaters[#langUpdaters + 1] = function()
 end
 paintAct()
 
-actBtn.MouseButton1Click:Connect(function()
-    ap.Visible = not ap.Visible
-    if ap.Visible then cat.Visible = false; br.Visible = false; sp.Visible = false; qp.Visible = false end
-end)
-
 -- live-push the campaign status into the panel label
 task.spawn(function()
     while alive() do
-        if ap.Visible and State.actStatus ~= "" then apStatus.Text = State.actStatus end
+        if pages.act.Visible and State.actStatus ~= "" then apStatus.Text = State.actStatus end
         task.wait(0.2)
     end
 end)
@@ -2387,7 +2405,6 @@ UserInput.InputBegan:Connect(function(i, gpe)
         br.Visible = false
         sp.Visible = false
         qp.Visible = false
-        ap.Visible = false
     end
 end)
 
@@ -2399,5 +2416,7 @@ task.spawn(function()
         task.wait(0.3)
     end
 end)
+
+showTab("auto")
 
 print("[SSAuto] loaded. Toggle Auto Roll. RightShift = hide/show.")
