@@ -20,6 +20,7 @@ local PickPlayer   = Remotes:WaitForChild("PickPlayer")
 local TeamUpdate   = Remotes:WaitForChild("TeamUpdate")
 local RunComplete  = Remotes:WaitForChild("RunComplete")
 local RestartRun   = Remotes:WaitForChild("RestartRun")
+local RerollRequest= Remotes:WaitForChild("RerollRequest")  -- reroll current reveals ("four") on the SAME team
 
 --==================== open-position tracking ====================
 -- IMPORTANT: RollResult.placeable is NOT reliable (it reports every group as
@@ -107,10 +108,22 @@ local function waitAny(map, timeout)
 end
 
 --==================== state ====================
-local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0, reQuest = false, persist = false, hunt = false, huntTarget = 103 }
+local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0, reQuest = false, persist = false, hunt = false, huntTarget = 103,
+    -- Action panel (reroll / refresh with targets + max-uses cap):
+    act = false,            -- true while an action campaign is running
+    actMode = "reroll",     -- "reroll" (fresh team) | "refresh" (reroll 4 cards, same team)
+    actTeam = false,        -- reroll only: target an exact country+year (vs OVR target)
+    actCountry = "Brazil",  -- English country key (matches RollResult.country)
+    actYear = 2026,         -- target year (number)
+    actOVR = 103,           -- target OVR+ (used for refresh, and reroll when actTeam=false)
+    actMax = 50,            -- max reroll/refresh uses (0 = unlimited)
+    actCount = 0,           -- uses spent in current campaign
+    actStatus = "",         -- action-panel status line
+}
 getgenv().SSAuto = State   -- external control/inspection: getgenv().SSAuto.on = true
 local paintHunt            -- forward decl: hunt-toggle repaint (assigned in UI section)
 local paintRoll            -- forward decl: auto-roll-toggle repaint (assigned in UI section)
+local paintAct             -- forward decl: action-panel Start/Stop repaint (UI section)
 
 local ALL_OPEN = { GK = true, DEF = true, MID = true, FWD = true }
 
@@ -298,6 +311,101 @@ task.spawn(function()
         else
             n = 0
             task.wait(0.2)
+        end
+    end
+end)
+
+--==================== action campaign (reroll / refresh) ====================
+-- Driven by the Action panel. Two mechanics:
+--   reroll  = RestartRun -> RollRequest  (fresh random team every time). Target is
+--             either an exact country+year (State.actTeam) OR an OVR+ threshold.
+--   refresh = RerollRequest:FireServer("four")  (redraw the 4 revealed cards on the
+--             SAME team; keeps country/year). Target is always OVR+.
+-- Stops when: target hit, max uses reached, or user hits Stop (State.act=false).
+local function bestOvr(reveals)
+    local mx, best = 0, nil
+    for _, v in pairs(reveals) do
+        if type(v) == "table" and type(v.ovr) == "number" and v.ovr > mx then
+            mx, best = v.ovr, v
+        end
+    end
+    return mx, best
+end
+task.spawn(function()
+    while alive() do
+        if not State.act then
+            task.wait(0.15)
+        else
+            -- rolling/hunting are mutually exclusive with a campaign
+            if State.on then State.on = false; pcall(paintRoll) end
+            if State.hunt then State.hunt = false; pcall(paintHunt) end
+            local mode = State.actMode
+            State.actCount = 0
+            State.actStatus = (mode == "refresh") and "refresh: start" or "reroll: start"
+            pcall(paintAct)
+            -- refresh needs a live roll on the current team before redrawing cards
+            if mode == "refresh" then
+                RollRequest:FireServer()
+                waitAny({ roll = RollResult, done = RunComplete }, 1.5)
+            end
+            while State.act and alive() do
+                local ev, payload
+                if mode == "refresh" then
+                    RerollRequest:FireServer("four")
+                    ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.5)
+                else
+                    RestartRun:FireServer()
+                    RollRequest:FireServer()
+                    ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.2)
+                    if not ev then
+                        Remotes.RequestState:FireServer()
+                        ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.2)
+                    end
+                end
+                if not alive() or not State.act then break end
+                if ev == "roll" and type(payload) == "table" and type(payload.reveals) == "table" then
+                    State.actCount = State.actCount + 1
+                    local mx, best = bestOvr(payload.reveals)
+                    local hit
+                    if mode == "reroll" and State.actTeam then
+                        hit = (tostring(payload.country):lower() == tostring(State.actCountry):lower())
+                            and (tonumber(payload.year) == State.actYear)
+                    else
+                        hit = mx >= State.actOVR
+                    end
+                    if hit then
+                        State.act = false; pcall(paintAct)
+                        if mode == "reroll" and State.actTeam then
+                            State.actStatus = string.format("ZNALEZIONE %s %s  (%d prob, top %d)",
+                                tostring(payload.country), tostring(payload.year), State.actCount, mx)
+                        else
+                            State.actStatus = string.format("ZNALEZIONE %d %s  (%s %s, %d prob)",
+                                mx, tostring(best and best.name or "?"),
+                                tostring(payload.country), tostring(payload.year), State.actCount)
+                        end
+                        break
+                    elseif State.actMax > 0 and State.actCount >= State.actMax then
+                        State.act = false; pcall(paintAct)
+                        State.actStatus = string.format("LIMIT %d osiagniety (top %d)", State.actMax, mx)
+                        break
+                    else
+                        if State.actCount % 3 == 0 then
+                            State.actStatus = string.format("%s: %d/%s (top %d)", mode,
+                                State.actCount, (State.actMax > 0) and tostring(State.actMax) or "inf", mx)
+                        end
+                    end
+                elseif ev == "done" then
+                    if mode == "refresh" then
+                        State.act = false; pcall(paintAct)
+                        State.actStatus = "refresh: druzyna zapelniona"
+                        break
+                    else
+                        RestartRun:FireServer()
+                    end
+                else
+                    task.wait(0.2)
+                end
+            end
         end
     end
 end)
@@ -646,6 +754,12 @@ local STR = {
         persist = "Zapamietaj opcje (reconnect)",
         hunt = "Poluj OVR+ (reroll)",
         hunttgt = "Cel OVR (maks 120)",
+        actbtn = "Akcje (reroll / refresh)", acttitle = "Akcje",
+        actmode = "Tryb", actreroll = "Reroll (nowa druzyna)", actrefresh = "Refresh (te same karty)",
+        acttarget = "Cel", acttteam = "Kraj + Rok", acttovr = "OVR+ dowolny",
+        actcountry = "Kraj", actyear = "Rok", actovr = "Cel OVR (maks 120)",
+        actmax = "Maks uzyc (0 = bez limitu)", actstart = "START", actstop = "STOP",
+        actidle = "gotowe",
     },
     EN = {
         cash = "Cash", autoroll = "Auto Roll", autobuy = "Auto Buy (shop)",
@@ -668,6 +782,12 @@ local STR = {
         persist = "Remember options (reconnect)",
         hunt = "Hunt OVR+ (reroll)",
         hunttgt = "Target OVR (max 120)",
+        actbtn = "Actions (reroll / refresh)", acttitle = "Actions",
+        actmode = "Mode", actreroll = "Reroll (new team)", actrefresh = "Refresh (same cards)",
+        acttarget = "Target", acttteam = "Country + Year", acttovr = "Any OVR+",
+        actcountry = "Country", actyear = "Year", actovr = "Target OVR (max 120)",
+        actmax = "Max uses (0 = unlimited)", actstart = "START", actstop = "STOP",
+        actidle = "ready",
     },
 }
 local function tr(k) return (STR[State.lang] or STR.PL)[k] or k end
@@ -919,7 +1039,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(230, 500)
+main.Size = UDim2.fromOffset(230, 536)
 main.Position = UDim2.fromOffset(40, 220)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -1992,6 +2112,251 @@ if QuestComplete then
     end)
 end
 
+--==================== action panel (reroll / refresh) ====================
+-- opens a popup to configure + run a reroll/refresh campaign with a target and a
+-- max-uses cap. reroll = fresh team (target country+year OR OVR+); refresh = redraw
+-- the 4 cards on the same team (target OVR+). Stop button aborts anything.
+local actBtn = Instance.new("TextButton")
+actBtn.Size = UDim2.new(1, -20, 0, 26)
+actBtn.Position = UDim2.fromOffset(10, 498)
+actBtn.BackgroundColor3 = BG2
+actBtn.Text = tr("actbtn")
+actBtn.TextColor3 = Color3.fromRGB(255, 200, 120)
+actBtn.Font = Enum.Font.GothamSemibold
+actBtn.TextSize = 13
+actBtn.AutoButtonColor = true
+actBtn.Parent = main
+Instance.new("UICorner", actBtn).CornerRadius = UDim.new(0, 8)
+langUpdaters[#langUpdaters + 1] = function() actBtn.Text = tr("actbtn") end
+
+local ap = Instance.new("Frame")
+ap.Size = UDim2.fromOffset(264, 380)
+ap.Position = UDim2.new(0.5, -132, 0.5, -190)
+ap.BackgroundColor3 = BG
+ap.BorderSizePixel = 0
+ap.Active = false
+ap.Visible = false
+ap.Parent = gui
+Instance.new("UICorner", ap).CornerRadius = UDim.new(0, 10)
+do local s = Instance.new("UIStroke", ap); s.Color = ACCENT; s.Thickness = 1.5; s.Transparency = 0.3 end
+
+local apTitle = Instance.new("TextLabel")
+apTitle.Active = true
+apTitle.Size = UDim2.new(1, 0, 0, 28)
+apTitle.BackgroundTransparency = 1
+apTitle.Text = tr("acttitle")
+apTitle.TextColor3 = Color3.fromRGB(230, 240, 234)
+apTitle.Font = Enum.Font.GothamBold
+apTitle.TextSize = 15
+apTitle.Parent = ap
+makeDraggable(ap, apTitle)
+langUpdaters[#langUpdaters + 1] = function() apTitle.Text = tr("acttitle") end
+
+local apClose = Instance.new("TextButton")
+apClose.Size = UDim2.fromOffset(24, 24)
+apClose.Position = UDim2.new(1, -30, 0, 4)
+apClose.BackgroundColor3 = Color3.fromRGB(70, 46, 46)
+apClose.Text = "X"; apClose.TextColor3 = Color3.fromRGB(240, 210, 210)
+apClose.Font = Enum.Font.GothamBold; apClose.TextSize = 13
+apClose.Parent = ap
+Instance.new("UICorner", apClose).CornerRadius = UDim.new(0, 6)
+apClose.MouseButton1Click:Connect(function() ap.Visible = false end)
+
+-- small labeled row helper: returns the holder frame (controls parented into it)
+local function apRow(y, key, h)
+    local holder = Instance.new("Frame")
+    holder.Size = UDim2.new(1, -20, 0, h or 28)
+    holder.Position = UDim2.fromOffset(10, y)
+    holder.BackgroundColor3 = BG2
+    holder.BorderSizePixel = 0
+    holder.Parent = ap
+    Instance.new("UICorner", holder).CornerRadius = UDim.new(0, 8)
+    if key then
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(0, 78, 1, 0)
+        lbl.Position = UDim2.fromOffset(10, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = tr(key)
+        lbl.TextColor3 = Color3.fromRGB(225, 232, 228)
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Font = Enum.Font.Gotham; lbl.TextSize = 12
+        lbl.Parent = holder
+        langUpdaters[#langUpdaters + 1] = function() lbl.Text = tr(key) end
+    end
+    return holder
+end
+
+-- a pair of segmented buttons (left/right) sharing a row; onPick(isLeft) fires.
+local function apSeg(holder, leftKey, rightKey, isLeftFn, onPick)
+    local bl = Instance.new("TextButton")
+    bl.Size = UDim2.new(0.5, -6, 0, 22); bl.Position = UDim2.new(0, 88, 0.5, -11)
+    bl.Font = Enum.Font.GothamSemibold; bl.TextSize = 11
+    bl.Text = tr(leftKey); bl.AutoButtonColor = false
+    bl.Parent = holder; Instance.new("UICorner", bl).CornerRadius = UDim.new(0, 6)
+    local br2 = Instance.new("TextButton")
+    br2.Size = UDim2.new(0.5, -12, 0, 22); br2.Position = UDim2.new(0.5, 42, 0.5, -11)
+    br2.Font = Enum.Font.GothamSemibold; br2.TextSize = 11
+    br2.Text = tr(rightKey); br2.AutoButtonColor = false
+    br2.Parent = holder; Instance.new("UICorner", br2).CornerRadius = UDim.new(0, 6)
+    local function paint()
+        local l = isLeftFn()
+        bl.BackgroundColor3 = l and ACCENT or Color3.fromRGB(70, 76, 72)
+        bl.TextColor3 = l and Color3.fromRGB(20, 24, 22) or Color3.fromRGB(220, 226, 222)
+        br2.BackgroundColor3 = (not l) and ACCENT or Color3.fromRGB(70, 76, 72)
+        br2.TextColor3 = (not l) and Color3.fromRGB(20, 24, 22) or Color3.fromRGB(220, 226, 222)
+    end
+    bl.MouseButton1Click:Connect(function() onPick(true); paint() end)
+    br2.MouseButton1Click:Connect(function() onPick(false); paint() end)
+    langUpdaters[#langUpdaters + 1] = function() bl.Text = tr(leftKey); br2.Text = tr(rightKey) end
+    return paint, bl, br2
+end
+
+-- a "< value >" cycler; provides prev/next over a list; onChange(idx) fires.
+local function apCycler(holder, getText, onPrev, onNext)
+    local prev = Instance.new("TextButton")
+    prev.Size = UDim2.fromOffset(24, 22); prev.Position = UDim2.new(0, 88, 0.5, -11)
+    prev.Text = "<"; prev.Font = Enum.Font.GothamBold; prev.TextSize = 14
+    prev.BackgroundColor3 = Color3.fromRGB(70, 76, 72); prev.TextColor3 = Color3.fromRGB(240, 240, 240)
+    prev.AutoButtonColor = true; prev.Parent = holder
+    Instance.new("UICorner", prev).CornerRadius = UDim.new(0, 6)
+    local val = Instance.new("TextLabel")
+    val.Size = UDim2.new(1, -88 - 24 - 24 - 20, 1, 0); val.Position = UDim2.fromOffset(88 + 26, 0)
+    val.BackgroundTransparency = 1; val.Text = getText()
+    val.TextColor3 = Color3.fromRGB(245, 245, 245); val.Font = Enum.Font.GothamSemibold; val.TextSize = 12
+    val.Parent = holder
+    local nxt = Instance.new("TextButton")
+    nxt.Size = UDim2.fromOffset(24, 22); nxt.Position = UDim2.new(1, -30, 0.5, -11)
+    nxt.Text = ">"; nxt.Font = Enum.Font.GothamBold; nxt.TextSize = 14
+    nxt.BackgroundColor3 = Color3.fromRGB(70, 76, 72); nxt.TextColor3 = Color3.fromRGB(240, 240, 240)
+    nxt.AutoButtonColor = true; nxt.Parent = holder
+    Instance.new("UICorner", nxt).CornerRadius = UDim.new(0, 6)
+    local function paint() val.Text = getText() end
+    prev.MouseButton1Click:Connect(function() onPrev(); paint() end)
+    nxt.MouseButton1Click:Connect(function() onNext(); paint() end)
+    return paint, prev, nxt, val
+end
+
+-- numeric input box on the right of a labeled row; clamp + writeback via commit().
+local function apNumBox(holder, getVal, commit)
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.fromOffset(60, 22); box.Position = UDim2.new(1, -70, 0.5, -11)
+    box.BackgroundColor3 = Color3.fromRGB(70, 76, 72); box.TextColor3 = Color3.fromRGB(245, 245, 245)
+    box.Font = Enum.Font.GothamBold; box.TextSize = 12; box.ClearTextOnFocus = false
+    box.Text = tostring(getVal()); box.Parent = holder
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+    box.FocusLost:Connect(function() box.Text = tostring(commit(box.Text)) end)
+    return box
+end
+
+-- country + year cycler indices (over the sorted lists already built above)
+local acCountryIdx = 1
+for i, c in ipairs(countryNames) do if c == State.actCountry then acCountryIdx = i; break end end
+local function acYears() local ys = {}; for y in pairs(teamsCY[countryNames[acCountryIdx]] or {}) do ys[#ys + 1] = y end; table.sort(ys); return ys end
+local acYearIdx = 1
+do local ys = acYears(); for i, y in ipairs(ys) do if y == State.actYear then acYearIdx = i; break end end
+   State.actCountry = countryNames[acCountryIdx]; State.actYear = ys[acYearIdx] or ys[1] end
+
+-- build rows
+local rMode   = apRow(36,  "actmode")
+local rTgt    = apRow(70,  "acttarget")
+local rCountry= apRow(104, "actcountry")
+local rYear   = apRow(138, "actyear")
+local rOvr    = apRow(172, "actovr")
+local rMax    = apRow(206, "actmax")
+
+local paintMode = apSeg(rMode, "actreroll", "actrefresh",
+    function() return State.actMode == "reroll" end,
+    function(isLeft) State.actMode = isLeft and "reroll" or "refresh"; if paintAct then paintAct() end end)
+local paintTgt = apSeg(rTgt, "acttteam", "acttovr",
+    function() return State.actTeam end,
+    function(isLeft) State.actTeam = isLeft; if paintAct then paintAct() end end)
+
+local paintCountry = apCycler(rCountry,
+    function() return cName(countryNames[acCountryIdx]) end,
+    function() acCountryIdx = ((acCountryIdx - 2) % #countryNames) + 1
+        State.actCountry = countryNames[acCountryIdx]; acYearIdx = 1
+        local ys = acYears(); State.actYear = ys[1]; if paintAct then paintAct() end end,
+    function() acCountryIdx = (acCountryIdx % #countryNames) + 1
+        State.actCountry = countryNames[acCountryIdx]; acYearIdx = 1
+        local ys = acYears(); State.actYear = ys[1]; if paintAct then paintAct() end end)
+
+local paintYear = apCycler(rYear,
+    function() return tostring(State.actYear) end,
+    function() local ys = acYears(); acYearIdx = ((acYearIdx - 2) % #ys) + 1; State.actYear = ys[acYearIdx] end,
+    function() local ys = acYears(); acYearIdx = (acYearIdx % #ys) + 1; State.actYear = ys[acYearIdx] end)
+
+apNumBox(rOvr, function() return State.actOVR end, function(t)
+    local v = tonumber((t:gsub("%D", ""))) or State.actOVR
+    if v < 80 then v = 80 elseif v > 120 then v = 120 end
+    State.actOVR = math.floor(v); return State.actOVR end)
+apNumBox(rMax, function() return State.actMax end, function(t)
+    local v = tonumber((t:gsub("%D", ""))) or State.actMax
+    if v < 0 then v = 0 elseif v > 100000 then v = 100000 end
+    State.actMax = math.floor(v); return State.actMax end)
+
+-- START / STOP buttons
+local startBtn = Instance.new("TextButton")
+startBtn.Size = UDim2.new(0.5, -14, 0, 30); startBtn.Position = UDim2.fromOffset(10, 244)
+startBtn.BackgroundColor3 = ACCENT; startBtn.Text = tr("actstart")
+startBtn.TextColor3 = Color3.fromRGB(18, 22, 20); startBtn.Font = Enum.Font.GothamBold
+startBtn.TextSize = 14; startBtn.AutoButtonColor = true; startBtn.Parent = ap
+Instance.new("UICorner", startBtn).CornerRadius = UDim.new(0, 8)
+
+local stopBtn = Instance.new("TextButton")
+stopBtn.Size = UDim2.new(0.5, -14, 0, 30); stopBtn.Position = UDim2.new(0.5, 4, 0, 244)
+stopBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60); stopBtn.Text = tr("actstop")
+stopBtn.TextColor3 = Color3.fromRGB(245, 235, 235); stopBtn.Font = Enum.Font.GothamBold
+stopBtn.TextSize = 14; stopBtn.AutoButtonColor = true; stopBtn.Parent = ap
+Instance.new("UICorner", stopBtn).CornerRadius = UDim.new(0, 8)
+
+local apStatus = Instance.new("TextLabel")
+apStatus.Size = UDim2.new(1, -20, 0, 90); apStatus.Position = UDim2.fromOffset(10, 284)
+apStatus.BackgroundColor3 = BG2; apStatus.BackgroundTransparency = 0.3
+apStatus.Text = tr("actidle"); apStatus.TextColor3 = Color3.fromRGB(200, 210, 205)
+apStatus.Font = Enum.Font.Gotham; apStatus.TextSize = 12; apStatus.TextWrapped = true
+apStatus.TextXAlignment = Enum.TextXAlignment.Left; apStatus.TextYAlignment = Enum.TextYAlignment.Top
+apStatus.Parent = ap
+Instance.new("UICorner", apStatus).CornerRadius = UDim.new(0, 8)
+do local p = Instance.new("UIPadding", apStatus); p.PaddingLeft = UDim.new(0, 8); p.PaddingTop = UDim.new(0, 6); p.PaddingRight = UDim.new(0, 6) end
+
+startBtn.MouseButton1Click:Connect(function() State.act = true; if paintAct then paintAct() end end)
+stopBtn.MouseButton1Click:Connect(function()
+    State.act = false; State.actStatus = tr("actidle"); if paintAct then paintAct() end
+end)
+
+-- paintAct: reflect current config + running state onto every control
+paintAct = function()
+    local running = State.act
+    local teamMode = (State.actMode == "reroll") and State.actTeam
+    paintMode(); paintTgt(); paintCountry(); paintYear()
+    -- country/year only apply to reroll + team-target; gray them otherwise
+    local dimC = teamMode and 0 or 0.55
+    rCountry.BackgroundTransparency = dimC; rYear.BackgroundTransparency = dimC
+    -- target selector only meaningful for reroll
+    rTgt.BackgroundTransparency = (State.actMode == "reroll") and 0 or 0.55
+    startBtn.BackgroundColor3 = running and Color3.fromRGB(70, 76, 72) or ACCENT
+    startBtn.Text = running and (tr("actstart") .. "...") or tr("actstart")
+    if State.actStatus ~= "" then apStatus.Text = State.actStatus end
+end
+langUpdaters[#langUpdaters + 1] = function()
+    startBtn.Text = State.act and (tr("actstart") .. "...") or tr("actstart")
+    stopBtn.Text = tr("actstop")
+end
+paintAct()
+
+actBtn.MouseButton1Click:Connect(function()
+    ap.Visible = not ap.Visible
+    if ap.Visible then cat.Visible = false; br.Visible = false; sp.Visible = false; qp.Visible = false end
+end)
+
+-- live-push the campaign status into the panel label
+task.spawn(function()
+    while alive() do
+        if ap.Visible and State.actStatus ~= "" then apStatus.Text = State.actStatus end
+        task.wait(0.2)
+    end
+end)
+
 -- apply active language to every static label + re-render open panels
 applyLang = function()
     for _, f in ipairs(langUpdaters) do pcall(f) end
@@ -2022,6 +2387,7 @@ UserInput.InputBegan:Connect(function(i, gpe)
         br.Visible = false
         sp.Visible = false
         qp.Visible = false
+        ap.Visible = false
     end
 end)
 
