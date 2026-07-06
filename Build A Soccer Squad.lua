@@ -316,12 +316,14 @@ task.spawn(function()
 end)
 
 --==================== action campaign (reroll / refresh) ====================
--- Driven by the Action panel. Both mechanics reroll the CURRENT reveals via the
--- game's own RerollRequest remote (same as the in-game Reroll button):
---   reroll  = RerollRequest:FireServer("year")  (respin whole team -> new country/
---             year/cards). Target = exact country+year (State.actTeam) OR OVR+.
+-- Driven by the Action panel. Two mechanics:
+--   reroll  = RestartRun -> RollRequest  (fresh random team every time; free and
+--             unlimited server-side). Target = exact country+year (State.actTeam)
+--             OR an OVR+ threshold. (RerollRequest("year") is NOT used: the server
+--             only grants 1 free "year" reroll per roll + bank, then wants Robux.)
 --   refresh = RerollRequest:FireServer("four")  (redraw the 4 revealed cards on the
---             SAME team; keeps country/year). Target is always OVR+.
+--             SAME team). Also 1 free per roll + bank; when spent we RestartRun to a
+--             new team and keep hunting the OVR target.
 -- Stops when: target hit, max uses reached, or user hits Stop (State.act=false).
 local function bestOvr(reveals)
     local mx, best = 0, nil
@@ -344,19 +346,35 @@ task.spawn(function()
             State.actCount = 0
             State.actStatus = (mode == "refresh") and "refresh: start" or "reroll: start"
             pcall(paintAct)
-            -- both modes reroll the CURRENT reveals via RerollRequest, so we need a
-            -- live roll on a team first. refresh redraws the 4 cards ("four"); reroll
-            -- respins the whole team ("year") = same button the game's Reroll uses.
-            RollRequest:FireServer()
-            waitAny({ roll = RollResult, done = RunComplete }, 1.5)
-            local rerollArg = (mode == "refresh") and "four" or "year"
+            -- refresh needs a live roll on the current team before redrawing cards.
+            -- NOTE: RerollRequest is server-limited (1 free per type per roll + bank,
+            -- then Robux). So reroll mode uses RestartRun+RollRequest (free + unlimited,
+            -- fresh team each time); refresh spends the one free "four" redraw per roll,
+            -- and when that's exhausted it restarts to a new team to keep going.
+            if mode == "refresh" then
+                RollRequest:FireServer()
+                waitAny({ roll = RollResult, done = RunComplete }, 1.5)
+            end
             while State.act and alive() do
                 local ev, payload
-                RerollRequest:FireServer(rerollArg)
-                ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.5)
-                if not ev then
-                    Remotes.RequestState:FireServer()
+                if mode == "refresh" then
+                    RerollRequest:FireServer("four")
+                    ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.5)
+                    if not ev then
+                        -- free "four" spent + bank empty: hop to a fresh team so the
+                        -- OVR hunt continues instead of stalling on a paid prompt.
+                        RestartRun:FireServer()
+                        RollRequest:FireServer()
+                        ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.5)
+                    end
+                else
+                    RestartRun:FireServer()
+                    RollRequest:FireServer()
                     ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.2)
+                    if not ev then
+                        Remotes.RequestState:FireServer()
+                        ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.2)
+                    end
                 end
                 if not alive() or not State.act then break end
                 if ev == "roll" and type(payload) == "table" and type(payload.reveals) == "table" then
