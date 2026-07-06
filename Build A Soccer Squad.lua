@@ -316,9 +316,10 @@ task.spawn(function()
 end)
 
 --==================== action campaign (reroll / refresh) ====================
--- Driven by the Action panel. Two mechanics:
---   reroll  = RestartRun -> RollRequest  (fresh random team every time). Target is
---             either an exact country+year (State.actTeam) OR an OVR+ threshold.
+-- Driven by the Action panel. Both mechanics reroll the CURRENT reveals via the
+-- game's own RerollRequest remote (same as the in-game Reroll button):
+--   reroll  = RerollRequest:FireServer("year")  (respin whole team -> new country/
+--             year/cards). Target = exact country+year (State.actTeam) OR OVR+.
 --   refresh = RerollRequest:FireServer("four")  (redraw the 4 revealed cards on the
 --             SAME team; keeps country/year). Target is always OVR+.
 -- Stops when: target hit, max uses reached, or user hits Stop (State.act=false).
@@ -343,24 +344,19 @@ task.spawn(function()
             State.actCount = 0
             State.actStatus = (mode == "refresh") and "refresh: start" or "reroll: start"
             pcall(paintAct)
-            -- refresh needs a live roll on the current team before redrawing cards
-            if mode == "refresh" then
-                RollRequest:FireServer()
-                waitAny({ roll = RollResult, done = RunComplete }, 1.5)
-            end
+            -- both modes reroll the CURRENT reveals via RerollRequest, so we need a
+            -- live roll on a team first. refresh redraws the 4 cards ("four"); reroll
+            -- respins the whole team ("year") = same button the game's Reroll uses.
+            RollRequest:FireServer()
+            waitAny({ roll = RollResult, done = RunComplete }, 1.5)
+            local rerollArg = (mode == "refresh") and "four" or "year"
             while State.act and alive() do
                 local ev, payload
-                if mode == "refresh" then
-                    RerollRequest:FireServer("four")
-                    ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.5)
-                else
-                    RestartRun:FireServer()
-                    RollRequest:FireServer()
+                RerollRequest:FireServer(rerollArg)
+                ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.5)
+                if not ev then
+                    Remotes.RequestState:FireServer()
                     ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.2)
-                    if not ev then
-                        Remotes.RequestState:FireServer()
-                        ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.2)
-                    end
                 end
                 if not alive() or not State.act then break end
                 if ev == "roll" and type(payload) == "table" and type(payload.reveals) == "table" then
@@ -395,13 +391,11 @@ task.spawn(function()
                         end
                     end
                 elseif ev == "done" then
-                    if mode == "refresh" then
-                        State.act = false; pcall(paintAct)
-                        State.actStatus = "refresh: druzyna zapelniona"
-                        break
-                    else
-                        RestartRun:FireServer()
-                    end
+                    -- team got filled / run ended: start a fresh run so there are
+                    -- reveals to reroll again, then continue the campaign.
+                    RestartRun:FireServer()
+                    RollRequest:FireServer()
+                    waitAny({ roll = RollResult, done = RunComplete }, 1.5)
                 else
                     task.wait(0.2)
                 end
