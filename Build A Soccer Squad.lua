@@ -8,6 +8,20 @@ local SESSION = tick()
 getgenv().__SSAutoSession = SESSION
 local function alive() return getgenv().__SSAutoSession == SESSION end
 
+-- connection registry: disconnect any connections from a PRIOR run of this script,
+-- then track new ones. Without this, every re-execute stacks another OnClientEvent /
+-- UserInputService handler on persistent objects (remotes, services) that never gets
+-- cleaned up -> memory leak (handlers pile up and keep firing) + eventual crash.
+-- GUI-internal connections auto-disconnect when the old ScreenGui is Destroyed, so we
+-- only need to track connections on persistent (non-GUI) objects.
+if getgenv().__SSAutoConns then
+    for _, c in ipairs(getgenv().__SSAutoConns) do pcall(function() c:Disconnect() end) end
+end
+local __ssConns = {}
+getgenv().__SSAutoConns = __ssConns
+-- track(signal:Connect(fn)) -> registers the connection for cleanup on next run.
+local function track(c) __ssConns[#__ssConns + 1] = c; return c end
+
 local Players    = game:GetService("Players")
 local RS         = game:GetService("ReplicatedStorage")
 local UserInput  = game:GetService("UserInputService")
@@ -61,7 +75,7 @@ local function fromSlots(p)
     remaining = rem
     teamFull = (total > 0 and filledTotal >= total)
 end
-TeamUpdate.OnClientEvent:Connect(fromSlots)
+track(TeamUpdate.OnClientEvent:Connect(fromSlots))
 
 -- ask the server for current state so openPos matches a run already in progress
 local function seedOpen()
@@ -361,6 +375,24 @@ task.spawn(function()
             State.actCount = 0
             State.actStatus = (mode == "refresh") and "refresh: start" or "reroll: start"
             pcall(paintAct)
+            -- live top-3 best hits seen during this hunt (OVR-target only). Cheap:
+            -- one insert + sort of a <=3 element list per roll -> no perf hit.
+            local topHits = {}
+            local function noteHit(card, country, year)
+                if not card or type(card.ovr) ~= "number" then return end
+                topHits[#topHits + 1] = { ovr = card.ovr, name = card.name, country = country, year = year }
+                table.sort(topHits, function(a, b) return a.ovr > b.ovr end)
+                for i = #topHits, 4, -1 do topHits[i] = nil end
+            end
+            local function topStr()
+                if #topHits == 0 then return "" end
+                local t = {}
+                for i, h in ipairs(topHits) do
+                    t[i] = string.format("%d) %d %s [%s %s]", i, h.ovr, tostring(h.name),
+                        tostring(h.country), tostring(h.year))
+                end
+                return "\n" .. table.concat(t, "\n")
+            end
             -- both modes reroll the CURRENT reveals via the game's own RerollRequest
             -- remote (same button the game uses): refresh = "four" (redraw 4 cards,
             -- same team), reroll = "year" (respin whole team -> new country/year).
@@ -393,6 +425,7 @@ task.spawn(function()
                         -- OVR target, optionally restricted to a chosen position
                         mx, best = bestOvrPos(payload.reveals, State.actPos)
                         hit = mx >= State.actOVR
+                        noteHit(best, payload.country, payload.year)
                     end
                     if hit then
                         State.act = false; pcall(paintAct)
@@ -410,10 +443,9 @@ task.spawn(function()
                         State.actStatus = string.format("LIMIT %d osiagniety (top %d)", State.actMax, mx)
                         break
                     else
-                        if State.actCount % 3 == 0 then
-                            State.actStatus = string.format("%s: %d/%s (top %d)", mode,
-                                State.actCount, (State.actMax > 0) and tostring(State.actMax) or "inf", mx)
-                        end
+                        State.actStatus = string.format("%s: %d/%s (top %d)%s", mode,
+                            State.actCount, (State.actMax > 0) and tostring(State.actMax) or "inf",
+                            mx, topStr())
                     end
                 elseif ev == "done" then
                     -- team got filled / run ended: start a fresh run so there are
@@ -889,11 +921,11 @@ end
 -- the exact team the most recent roll landed on (RollResult carries top-level
 -- .country and .year — the same values showRoll prints in the REFRESH label).
 local lastRoll = { country = nil, year = nil }
-RollResult.OnClientEvent:Connect(function(roll)
+track(RollResult.OnClientEvent:Connect(function(roll)
     if type(roll) == "table" and roll.country and roll.year then
         lastRoll = { country = roll.country, year = roll.year }
     end
-end)
+end))
 
 -- OVR -> tier color (gold / silver / bronze / grey)
 local function ovrColor(o)
@@ -934,9 +966,9 @@ end
 -- initial coins + live updates
 task.spawn(fetchCoins)
 if CoinsUpdate then
-    CoinsUpdate.OnClientEvent:Connect(function(n)
+    track(CoinsUpdate.OnClientEvent:Connect(function(n)
         if type(n) == "number" then State.coins = n end
-    end)
+    end))
 end
 
 -- auto-buy loop: while enabled, poll the CURRENT shop and unlock any affordable,
@@ -1008,9 +1040,9 @@ end
 local function hideOther(other)
     if other == plr then return end
     setCharHidden(other.Character, true)
-    playerConns[#playerConns + 1] = other.CharacterAdded:Connect(function(char)
+    playerConns[#playerConns + 1] = track(other.CharacterAdded:Connect(function(char)
         if State.fps then task.wait(0.2); setCharHidden(char, true) end
-    end)
+    end))
 end
 -- restore maps: images + viewports get RESTORED on toggle-off (they are GUI, so
 -- blanking is reversible); decals/textures/materials on world models stay stripped.
@@ -1065,22 +1097,22 @@ local function setFps(on)
             for _, inst in ipairs(pg:GetDescendants()) do stripPhoto(inst) end
         end
         if fpsConn then fpsConn:Disconnect() end
-        fpsConn = workspace.DescendantAdded:Connect(function(inst)
+        fpsConn = track(workspace.DescendantAdded:Connect(function(inst)
             if State.fps then task.defer(applyFpsToInstance, inst) end
-        end)
+        end))
         if guiConn then guiConn:Disconnect() end
         if pg then
-            guiConn = pg.DescendantAdded:Connect(function(inst)
+            guiConn = track(pg.DescendantAdded:Connect(function(inst)
                 if State.fps then task.defer(stripPhoto, inst) end
-            end)
+            end))
         end
         -- hide other players + catch late joiners
         for _, c in ipairs(playerConns) do pcall(function() c:Disconnect() end) end
         playerConns = {}
         for _, other in ipairs(Players:GetPlayers()) do hideOther(other) end
-        playerConns[#playerConns + 1] = Players.PlayerAdded:Connect(function(other)
+        playerConns[#playerConns + 1] = track(Players.PlayerAdded:Connect(function(other)
             if State.fps then hideOther(other) end
-        end)
+        end))
     else
         if fpsConn then fpsConn:Disconnect(); fpsConn = nil end
         if guiConn then guiConn:Disconnect(); guiConn = nil end
@@ -1159,16 +1191,16 @@ do
             dragging = true; dragStart = i.Position; startPos = main.Position
         end
     end)
-    UserInput.InputChanged:Connect(function(i)
+    track(UserInput.InputChanged:Connect(function(i)
         if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
             local d = i.Position - dragStart
             main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
                                       startPos.Y.Scale, startPos.Y.Offset + d.Y)
         end
-    end)
-    UserInput.InputEnded:Connect(function(i)
+    end))
+    track(UserInput.InputEnded:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
-    end)
+    end))
 end
 
 -- coins / cash label (header, right-aligned)
@@ -1378,15 +1410,15 @@ local function makeDraggable(frame, handle)
             dragging, ds, sp = true, i.Position, frame.Position
         end
     end)
-    UserInput.InputChanged:Connect(function(i)
+    track(UserInput.InputChanged:Connect(function(i)
         if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
             local d = i.Position - ds
             frame.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
         end
-    end)
-    UserInput.InputEnded:Connect(function(i)
+    end))
+    track(UserInput.InputEnded:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
-    end)
+    end))
 end
 
 local catBtn = Instance.new("TextButton")
@@ -2247,7 +2279,7 @@ local function doReconnect()
 end
 
 if QuestComplete then
-    QuestComplete.OnClientEvent:Connect(function(p)
+    track(QuestComplete.OnClientEvent:Connect(function(p)
         if not alive() then return end
         if State.reQuest and type(p) == "table" and p.id then
             -- reconnect only on the LAST quest (or any if we couldn't detect it)
@@ -2255,7 +2287,7 @@ if QuestComplete then
                 doReconnect()
             end
         end
-    end)
+    end))
 end
 
 --==================== action panel (reroll / refresh) ====================
@@ -2575,7 +2607,7 @@ applyLang = function()
     if sp.Visible then renderSpecials() end
 end
 
-UserInput.InputBegan:Connect(function(i, gpe)
+track(UserInput.InputBegan:Connect(function(i, gpe)
     if gpe then return end
     if i.KeyCode == Enum.KeyCode.RightShift then
         main.Visible = not main.Visible
@@ -2584,7 +2616,7 @@ UserInput.InputBegan:Connect(function(i, gpe)
         sp.Visible = false
         qp.Visible = false
     end
-end)
+end))
 
 task.spawn(function()
     while alive() do
