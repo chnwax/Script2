@@ -116,7 +116,7 @@ local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps
     actCountry = "Brazil",  -- English country key (matches RollResult.country)
     actYear = 2026,         -- target year (number)
     actOVR = 103,           -- target OVR+ (used for refresh, and reroll when actTeam=false)
-    actPos = "ANY",         -- restrict OVR target to a specific position ("ANY" = any)
+    actPos = {},            -- set of allowed spos (spos->true); empty = any position
     actMax = 50,            -- max reroll/refresh uses (0 = unlimited)
     actCount = 0,           -- uses spent in current campaign
     actStatus = "",         -- action-panel status line
@@ -325,6 +325,8 @@ end)
 -- the free/bank runs out the server stops answering and we fall back to
 -- RestartRun+RollRequest so the campaign keeps going instead of stalling.
 -- Stops when: target hit, max uses reached, or user hits Stop (State.act=false).
+-- forward decls (position model defined later, but used here)
+local cardSpos, cardEligible, selEmpty
 local function bestOvr(reveals)
     local mx, best = 0, nil
     for _, v in pairs(reveals) do
@@ -334,14 +336,14 @@ local function bestOvr(reveals)
     end
     return mx, best
 end
--- best OVR among reveals that can play targetSpos. reveals is keyed by broad line
--- (GK/DEF/MID/FWD), so the key is the card's line for eligibility. "ANY" = no filter.
-local function bestOvrPos(reveals, targetSpos)
-    if not targetSpos or targetSpos == "ANY" then return bestOvr(reveals) end
+-- best OVR among reveals eligible for the position selection `sel` (set of spos).
+-- reveals keyed by broad line (GK/DEF/MID/FWD). Empty/nil sel = no filter.
+local function bestOvrPos(reveals, sel)
+    if selEmpty(sel) then return bestOvr(reveals) end
     local mx, best = 0, nil
     for line, v in pairs(reveals) do
         if type(v) == "table" and type(v.ovr) == "number" and v.ovr > mx
-           and cardEligible(v.name, line, targetSpos) then
+           and cardEligible(v.name, line, sel) then
             mx, best = v.ovr, v
         end
     end
@@ -762,7 +764,7 @@ local CROSS_POS = {
     ["Salah"] = { "RM" }, ["Son"] = { "LM" }, ["Yamal"] = { "RM" }, ["Zinho"] = { "LM" },
 }
 -- ordered specific positions a named card can fill (line set + cross-line extras)
-local function cardSpos(name, pos)
+function cardSpos(name, pos)
     local seen, out = {}, {}
     for _, s in ipairs(SPOS_BY_POS[pos] or { pos }) do
         if not seen[s] then seen[s] = true; out[#out + 1] = s end
@@ -771,10 +773,16 @@ local function cardSpos(name, pos)
     if cx then for _, s in ipairs(cx) do if not seen[s] then seen[s] = true; out[#out + 1] = s end end end
     return out
 end
--- true if the card can play targetSpos ("ANY"/nil = always true)
-local function cardEligible(name, pos, targetSpos)
-    if not targetSpos or targetSpos == "ANY" then return true end
-    for _, s in ipairs(cardSpos(name, pos)) do if s == targetSpos then return true end end
+-- empty selection = no filter (any position). sel is a set spos->true, or "ANY"/nil.
+function selEmpty(sel)
+    if not sel or sel == "ANY" then return true end
+    for _ in pairs(sel) do return false end
+    return true
+end
+-- true if the card can play any position in selection `sel` (empty/nil = always true)
+function cardEligible(name, pos, sel)
+    if selEmpty(sel) then return true end
+    for _, s in ipairs(cardSpos(name, pos)) do if sel[s] then return true end end
     return false
 end
 -- short label for a card's positions: broad line, plus "+CM" style cross extras
@@ -2350,9 +2358,10 @@ local function apNumBox(holder, getVal, commit)
     return box
 end
 
--- dropdown on a labeled row: click the value button to expand a scrollable list,
--- click an option to select + collapse. options = array of values; labelOf(v)->text.
-local function apDrop(holder, y, options, getCur, labelOf, onPick)
+-- multi-select dropdown on a labeled row. Click the button to expand a scrollable
+-- list; click options to toggle them (stays open). First option is the "any" clear
+-- entry. `sel` is a set spos->true (empty = any). options = array of spos strings.
+local function apMultiDrop(holder, y, options, sel, anyLabel, onChange)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, -88 - 10, 0, 22); btn.Position = UDim2.new(0, 88, 0.5, -11)
     btn.BackgroundColor3 = Color3.fromRGB(70, 76, 72); btn.TextColor3 = Color3.fromRGB(245, 245, 245)
@@ -2365,40 +2374,64 @@ local function apDrop(holder, y, options, getCur, labelOf, onPick)
     arrow.BackgroundTransparency = 1; arrow.Text = "v"; arrow.TextColor3 = Color3.fromRGB(200, 210, 205)
     arrow.Font = Enum.Font.GothamBold; arrow.TextSize = 12; arrow.Parent = btn
 
-    -- expandable list overlay (parented to ap, floats above other rows)
-    local rows = math.min(#options, 6)
+    -- rows = "any" entry + each option
+    local nrows = #options + 1
     local list = Instance.new("ScrollingFrame")
     list.Visible = false; list.Active = true
-    list.Size = UDim2.new(1, -98, 0, rows * 24 + 8)
+    list.Size = UDim2.new(1, -98, 0, math.min(nrows, 6) * 24 + 6)
     list.Position = UDim2.fromOffset(88, y + 24)
     list.BackgroundColor3 = Color3.fromRGB(40, 45, 42); list.BorderSizePixel = 0
-    list.ScrollBarThickness = 4; list.CanvasSize = UDim2.new(0, 0, 0, #options * 24 + 4)
+    list.ScrollBarThickness = 4; list.CanvasSize = UDim2.new(0, 0, 0, nrows * 24 + 4)
     list.ZIndex = 50; list.Parent = ap
     Instance.new("UICorner", list).CornerRadius = UDim.new(0, 6)
     do local lay = Instance.new("UIListLayout", list); lay.Padding = UDim.new(0, 2); lay.SortOrder = Enum.SortOrder.LayoutOrder
        local p = Instance.new("UIPadding", list); p.PaddingTop = UDim.new(0, 2); p.PaddingLeft = UDim.new(0, 2); p.PaddingRight = UDim.new(0, 2) end
 
-    local function paint() btn.Text = labelOf(getCur()) end
+    local function summary()
+        local picked = {}
+        for _, v in ipairs(options) do if sel[v] then picked[#picked + 1] = v end end
+        if #picked == 0 then return anyLabel end
+        return table.concat(picked, ", ")
+    end
+    local function paint() btn.Text = summary() end
+
+    local anyBtn = Instance.new("TextButton")
+    anyBtn.Size = UDim2.new(1, -4, 0, 22); anyBtn.LayoutOrder = 0
+    anyBtn.Font = Enum.Font.GothamSemibold; anyBtn.TextSize = 12; anyBtn.AutoButtonColor = true
+    anyBtn.Text = anyLabel; anyBtn.TextXAlignment = Enum.TextXAlignment.Left; anyBtn.ZIndex = 51
+    anyBtn.Parent = list; Instance.new("UICorner", anyBtn).CornerRadius = UDim.new(0, 5)
+    do local p = Instance.new("UIPadding", anyBtn); p.PaddingLeft = UDim.new(0, 8) end
+
     local optBtns = {}
     for i, v in ipairs(options) do
         local ob = Instance.new("TextButton")
         ob.Size = UDim2.new(1, -4, 0, 22); ob.LayoutOrder = i
-        ob.BackgroundColor3 = Color3.fromRGB(58, 64, 60); ob.TextColor3 = Color3.fromRGB(235, 240, 236)
         ob.Font = Enum.Font.Gotham; ob.TextSize = 12; ob.AutoButtonColor = true
-        ob.Text = labelOf(v); ob.TextXAlignment = Enum.TextXAlignment.Left; ob.ZIndex = 51
+        ob.Text = v; ob.TextXAlignment = Enum.TextXAlignment.Left; ob.ZIndex = 51
         ob.Parent = list; Instance.new("UICorner", ob).CornerRadius = UDim.new(0, 5)
         do local p = Instance.new("UIPadding", ob); p.PaddingLeft = UDim.new(0, 8) end
-        optBtns[i] = ob
-        ob.MouseButton1Click:Connect(function()
-            onPick(v); paint(); list.Visible = false; arrow.Text = "v"
-        end)
+        optBtns[v] = ob
     end
+
     local function highlight()
-        local cur = getCur()
-        for i, v in ipairs(options) do
-            optBtns[i].BackgroundColor3 = (v == cur) and ACCENT or Color3.fromRGB(58, 64, 60)
-            optBtns[i].TextColor3 = (v == cur) and Color3.fromRGB(20, 24, 22) or Color3.fromRGB(235, 240, 236)
+        local none = selEmpty(sel)
+        anyBtn.BackgroundColor3 = none and ACCENT or Color3.fromRGB(58, 64, 60)
+        anyBtn.TextColor3 = none and Color3.fromRGB(20, 24, 22) or Color3.fromRGB(235, 240, 236)
+        for _, v in ipairs(options) do
+            local on = sel[v] and true or false
+            optBtns[v].BackgroundColor3 = on and ACCENT or Color3.fromRGB(58, 64, 60)
+            optBtns[v].TextColor3 = on and Color3.fromRGB(20, 24, 22) or Color3.fromRGB(235, 240, 236)
         end
+    end
+    anyBtn.MouseButton1Click:Connect(function()
+        for k in pairs(sel) do sel[k] = nil end
+        paint(); highlight(); if onChange then onChange() end
+    end)
+    for _, v in ipairs(options) do
+        optBtns[v].MouseButton1Click:Connect(function()
+            sel[v] = (not sel[v]) or nil
+            paint(); highlight(); if onChange then onChange() end
+        end)
     end
     btn.MouseButton1Click:Connect(function()
         list.Visible = not list.Visible
@@ -2426,8 +2459,6 @@ local rOvr    = apRow(164, "actovr")
 local rPos    = apRow(196, "actpos")
 local rMax    = apRow(228, "actmax")
 
--- position options over {"ANY"} + SPOS_ALL
-local acPosList = {"ANY"}; for _, s in ipairs(SPOS_ALL) do acPosList[#acPosList + 1] = s end
 
 local paintMode = apSeg(rMode, "actreroll", "actrefresh",
     function() return State.actMode == "reroll" end,
@@ -2450,10 +2481,8 @@ local paintYear = apCycler(rYear,
     function() local ys = acYears(); acYearIdx = ((acYearIdx - 2) % #ys) + 1; State.actYear = ys[acYearIdx] end,
     function() local ys = acYears(); acYearIdx = (acYearIdx % #ys) + 1; State.actYear = ys[acYearIdx] end)
 
-local paintPos = apDrop(rPos, 196, acPosList,
-    function() return State.actPos end,
-    function(v) return (v == "ANY") and tr("actposany") or v end,
-    function(v) State.actPos = v; if paintAct then paintAct() end end)
+local paintPos = apMultiDrop(rPos, 196, SPOS_ALL, State.actPos, tr("actposany"),
+    function() if paintAct then paintAct() end end)
 
 apNumBox(rOvr, function() return State.actOVR end, function(t)
     local v = tonumber((t:gsub("%D", ""))) or State.actOVR
