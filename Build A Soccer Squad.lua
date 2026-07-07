@@ -286,6 +286,24 @@ end
 -- mutually exclusive: turning hunt on forces the fill loop (State.on) off.
 task.spawn(function()
     local n = 0
+    -- live top-3 best OVRs seen this hunt, deduped by OVR value (distinct values only).
+    -- e.g. after 2000 rolls dropping 103/105/101 -> shows 1.105 2.103 3.101.
+    local topHits = {}
+    local function noteHit(card, country, year)
+        if not card or type(card.ovr) ~= "number" then return end
+        for _, h in ipairs(topHits) do if h.ovr == card.ovr then return end end
+        topHits[#topHits + 1] = { ovr = card.ovr, name = card.name, country = country, year = year }
+        table.sort(topHits, function(a, b) return a.ovr > b.ovr end)
+        for i = #topHits, 4, -1 do topHits[i] = nil end
+    end
+    local function topStr()
+        if #topHits == 0 then return "" end
+        local t = {}
+        for i, h in ipairs(topHits) do
+            t[i] = string.format("%d. %d %s", i, h.ovr, tostring(h.name))
+        end
+        return "\n" .. table.concat(t, "\n")
+    end
     while alive() do
         if State.hunt then
             if State.on then State.on = false; pcall(paintRoll) end
@@ -303,12 +321,13 @@ task.spawn(function()
                         mx, best = v.ovr, v
                     end
                 end
+                noteHit(best, payload.country, payload.year)
                 if mx >= State.huntTarget then
                     State.hunt = false
                     pcall(paintHunt)
-                    State.status = string.format("ZNALEZIONE %d %s  (%s %s)", mx,
+                    State.status = string.format("ZNALEZIONE %d %s  (%s %s)%s", mx,
                         tostring(best and best.name or "?"),
-                        tostring(payload.country), tostring(payload.year))
+                        tostring(payload.country), tostring(payload.year), topStr())
                 else
                     -- MAX SPEED: fire RestartRun directly (bypass doRestart's 0.5s
                     -- debounce) and roll again immediately with NO wait. Server keeps
@@ -316,7 +335,9 @@ task.spawn(function()
                     -- cycle to avoid label spam.
                     RestartRun:FireServer()
                     n = n + 1
-                    if n % 5 == 0 then State.status = string.format("poluje %d+  (%d roli)", State.huntTarget, n) end
+                    if n % 5 == 0 then
+                        State.status = string.format("poluje %d+  (%d roli)%s", State.huntTarget, n, topStr())
+                    end
                 end
             elseif ev == "done" then
                 RestartRun:FireServer()
@@ -325,6 +346,7 @@ task.spawn(function()
             end
         else
             n = 0
+            topHits = {}
             task.wait(0.2)
         end
     end
@@ -380,6 +402,7 @@ task.spawn(function()
             local topHits = {}
             local function noteHit(card, country, year)
                 if not card or type(card.ovr) ~= "number" then return end
+                for _, h in ipairs(topHits) do if h.ovr == card.ovr then return end end
                 topHits[#topHits + 1] = { ovr = card.ovr, name = card.name, country = country, year = year }
                 table.sort(topHits, function(a, b) return a.ovr > b.ovr end)
                 for i = #topHits, 4, -1 do topHits[i] = nil end
@@ -388,8 +411,7 @@ task.spawn(function()
                 if #topHits == 0 then return "" end
                 local t = {}
                 for i, h in ipairs(topHits) do
-                    t[i] = string.format("%d) %d %s [%s %s]", i, h.ovr, tostring(h.name),
-                        tostring(h.country), tostring(h.year))
+                    t[i] = string.format("%d. %d %s", i, h.ovr, tostring(h.name))
                 end
                 return "\n" .. table.concat(t, "\n")
             end
@@ -1377,43 +1399,6 @@ htBox.FocusLost:Connect(function()
     htBox.Text = tostring(State.huntTarget)
 end)
 
--- Reconnect button: rejoins the same place. Two-click confirm (arm ~3s) so it is
--- never triggered by an accidental single click.
-local rcBtn = Instance.new("TextButton")
-rcBtn.Size = UDim2.new(1, 0, 0, 32)
-rcBtn.Position = UDim2.fromOffset(0, 284)
-rcBtn.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
-rcBtn.Text = tr("reconnect")
-rcBtn.TextColor3 = TXT
-rcBtn.Font = Enum.Font.GothamBold
-rcBtn.TextSize = 13
-rcBtn.AutoButtonColor = true
-rcBtn.Parent = pAuto
-corner(rcBtn, 8)
-langUpdaters[#langUpdaters + 1] = function()
-    if not rcBtn:GetAttribute("armed") then rcBtn.Text = tr("reconnect") end
-end
-local rcArmToken = 0
-rcBtn.MouseButton1Click:Connect(function()
-    if rcBtn:GetAttribute("armed") then
-        rcBtn.Text = tr("reconnecting")
-        if doReconnect then doReconnect() end
-        return
-    end
-    rcBtn:SetAttribute("armed", true)
-    rcBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-    rcBtn.Text = tr("reconnectconfirm")
-    rcArmToken = rcArmToken + 1
-    local myTok = rcArmToken
-    task.delay(3, function()
-        if myTok == rcArmToken and rcBtn:GetAttribute("armed") then
-            rcBtn:SetAttribute("armed", false)
-            rcBtn.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
-            rcBtn.Text = tr("reconnect")
-        end
-    end)
-end)
-
 -- restore toggle states after a teleport reload (queued reloader calls this).
 getgenv().SSAuto.restore = function(o)
     o = o or {}
@@ -1937,6 +1922,43 @@ spBtn.TextSize = 13
 spBtn.AutoButtonColor = true
 spBtn.Parent = pages.cards
 corner(spBtn, 8)
+
+-- Reconnect button: rejoins the same place. Two-click confirm (arm ~3s) so it is
+-- never triggered by an accidental single click.
+local rcBtn = Instance.new("TextButton")
+rcBtn.Size = UDim2.new(1, 0, 0, 32)
+rcBtn.Position = UDim2.fromOffset(0, 114)
+rcBtn.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
+rcBtn.Text = tr("reconnect")
+rcBtn.TextColor3 = TXT
+rcBtn.Font = Enum.Font.GothamBold
+rcBtn.TextSize = 13
+rcBtn.AutoButtonColor = true
+rcBtn.Parent = pages.cards
+corner(rcBtn, 8)
+langUpdaters[#langUpdaters + 1] = function()
+    if not rcBtn:GetAttribute("armed") then rcBtn.Text = tr("reconnect") end
+end
+local rcArmToken = 0
+rcBtn.MouseButton1Click:Connect(function()
+    if rcBtn:GetAttribute("armed") then
+        rcBtn.Text = tr("reconnecting")
+        if doReconnect then doReconnect() end
+        return
+    end
+    rcBtn:SetAttribute("armed", true)
+    rcBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+    rcBtn.Text = tr("reconnectconfirm")
+    rcArmToken = rcArmToken + 1
+    local myTok = rcArmToken
+    task.delay(3, function()
+        if myTok == rcArmToken and rcBtn:GetAttribute("armed") then
+            rcBtn:SetAttribute("armed", false)
+            rcBtn.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
+            rcBtn.Text = tr("reconnect")
+        end
+    end)
+end)
 
 local sp = Instance.new("Frame")
 sp.Size = UDim2.fromOffset(340, 430)
