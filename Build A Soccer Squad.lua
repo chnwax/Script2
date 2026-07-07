@@ -122,7 +122,7 @@ local function waitAny(map, timeout)
 end
 
 --==================== state ====================
-local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0, reQuest = false, persist = false, hunt = false, huntTarget = 103,
+local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps = false, coins = 0, reQuest = false, persist = false, hunt = false, huntTarget = 103, showTop3 = true,
     -- Action panel (reroll / refresh with targets + max-uses cap):
     act = false,            -- true while an action campaign is running
     actMode = "reroll",     -- "reroll" (fresh team) | "refresh" (reroll 4 cards, same team)
@@ -297,7 +297,7 @@ task.spawn(function()
         for i = #topHits, 4, -1 do topHits[i] = nil end
     end
     local function topStr()
-        if #topHits == 0 then return "" end
+        if not State.showTop3 or #topHits == 0 then return "" end
         local t = {}
         for i, h in ipairs(topHits) do
             t[i] = string.format("%d. %d %s", i, h.ovr, tostring(h.name))
@@ -408,7 +408,7 @@ task.spawn(function()
                 for i = #topHits, 4, -1 do topHits[i] = nil end
             end
             local function topStr()
-                if #topHits == 0 then return "" end
+                if not State.showTop3 or #topHits == 0 then return "" end
                 local t = {}
                 for i, h in ipairs(topHits) do
                     t[i] = string.format("%d. %d %s", i, h.ovr, tostring(h.name))
@@ -885,6 +885,7 @@ local STR = {
         persist = "Zapamietaj opcje (reconnect)",
         hunt = "Poluj OVR+ (reroll)",
         hunttgt = "Cel OVR (maks 120)",
+        showtop3 = "Pokaz top 3 (polowanie)",
         reconnect = "Reconnect", reconnectconfirm = "Potwierdz? (klik)", reconnecting = "Reconnect...",
         actbtn = "Akcje (reroll / refresh)", acttitle = "Akcje",
         actmode = "Tryb", actreroll = "Reroll", actrefresh = "Refresh",
@@ -916,6 +917,7 @@ local STR = {
         persist = "Remember options (reconnect)",
         hunt = "Hunt OVR+ (reroll)",
         hunttgt = "Target OVR (max 120)",
+        showtop3 = "Show top 3 (hunt)",
         reconnect = "Reconnect", reconnectconfirm = "Confirm? (click)", reconnecting = "Reconnect...",
         actbtn = "Actions (reroll / refresh)", acttitle = "Actions",
         actmode = "Mode", actreroll = "Reroll", actrefresh = "Refresh",
@@ -1187,7 +1189,7 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = parent
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(280, 474)
+main.Size = UDim2.fromOffset(280, 508)
 main.Position = UDim2.fromOffset(40, 160)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
@@ -1357,11 +1359,14 @@ makeToggle(pAuto, 170, "lang", function() return State.lang == "EN" end,
 -- HUNT toggle. On -> forces fill-loop off.
 paintHunt = makeToggle(pAuto, 210, "hunt", function() return State.hunt end,
     function(v) State.hunt = v; if v then State.on = false; pcall(paintRoll) end end)
+-- show top-3 best hits during hunt (status label). Off = plain status only.
+local paintTop3 = makeToggle(pAuto, 244, "showtop3", function() return State.showTop3 end,
+    function(v) State.showTop3 = v end)
 
 -- HUNT target OVR input (clamped 80..120, default 103).
 local htRow = Instance.new("Frame")
 htRow.Size = UDim2.new(1, 0, 0, 30)
-htRow.Position = UDim2.fromOffset(0, 244)
+htRow.Position = UDim2.fromOffset(0, 278)
 htRow.BackgroundColor3 = BG2
 htRow.BorderSizePixel = 0
 htRow.Parent = pAuto
@@ -1412,7 +1417,7 @@ end
 
 local status = Instance.new("TextLabel")
 status.Size = UDim2.new(1, 0, 0, 78)
-status.Position = UDim2.fromOffset(0, 282)
+status.Position = UDim2.fromOffset(0, 316)
 status.BackgroundColor3 = BG2
 status.BackgroundTransparency = 0.4
 status.Text = "off"
