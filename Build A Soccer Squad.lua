@@ -863,6 +863,7 @@ local STR = {
         persist = "Zapamietaj opcje (reconnect)",
         hunt = "Poluj OVR+ (reroll)",
         hunttgt = "Cel OVR (maks 120)",
+        reconnect = "Reconnect", reconnectconfirm = "Potwierdz? (klik)", reconnecting = "Reconnect...",
         actbtn = "Akcje (reroll / refresh)", acttitle = "Akcje",
         actmode = "Tryb", actreroll = "Reroll", actrefresh = "Refresh",
         acttarget = "Cel", acttteam = "Kraj + Rok", acttovr = "OVR+ dowolny",
@@ -893,6 +894,7 @@ local STR = {
         persist = "Remember options (reconnect)",
         hunt = "Hunt OVR+ (reroll)",
         hunttgt = "Target OVR (max 120)",
+        reconnect = "Reconnect", reconnectconfirm = "Confirm? (click)", reconnecting = "Reconnect...",
         actbtn = "Actions (reroll / refresh)", acttitle = "Actions",
         actmode = "Mode", actreroll = "Reroll", actrefresh = "Refresh",
         acttarget = "Target", acttteam = "Country + Year", acttovr = "Any OVR+",
@@ -1316,6 +1318,7 @@ local function makeToggle(parentFrame, y, key, getVal, onChange)
 end
 
 --==================== AUTO tab ====================
+local doReconnect  -- defined later (needs TeleportService/reloader); used by button below
 local pAuto = pages.auto
 paintRoll = makeToggle(pAuto, 0, "autoroll", function() return State.on end,
     function(v) State.on = v end)
@@ -1372,6 +1375,43 @@ htBox.FocusLost:Connect(function()
     if v < 80 then v = 80 elseif v > 120 then v = 120 end
     State.huntTarget = math.floor(v)
     htBox.Text = tostring(State.huntTarget)
+end)
+
+-- Reconnect button: rejoins the same place. Two-click confirm (arm ~3s) so it is
+-- never triggered by an accidental single click.
+local rcBtn = Instance.new("TextButton")
+rcBtn.Size = UDim2.new(1, 0, 0, 32)
+rcBtn.Position = UDim2.fromOffset(0, 284)
+rcBtn.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
+rcBtn.Text = tr("reconnect")
+rcBtn.TextColor3 = TXT
+rcBtn.Font = Enum.Font.GothamBold
+rcBtn.TextSize = 13
+rcBtn.AutoButtonColor = true
+rcBtn.Parent = pAuto
+corner(rcBtn, 8)
+langUpdaters[#langUpdaters + 1] = function()
+    if not rcBtn:GetAttribute("armed") then rcBtn.Text = tr("reconnect") end
+end
+local rcArmToken = 0
+rcBtn.MouseButton1Click:Connect(function()
+    if rcBtn:GetAttribute("armed") then
+        rcBtn.Text = tr("reconnecting")
+        if doReconnect then doReconnect() end
+        return
+    end
+    rcBtn:SetAttribute("armed", true)
+    rcBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+    rcBtn.Text = tr("reconnectconfirm")
+    rcArmToken = rcArmToken + 1
+    local myTok = rcArmToken
+    task.delay(3, function()
+        if myTok == rcArmToken and rcBtn:GetAttribute("armed") then
+            rcBtn:SetAttribute("armed", false)
+            rcBtn.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
+            rcBtn.Text = tr("reconnect")
+        end
+    end)
 end)
 
 -- restore toggle states after a teleport reload (queued reloader calls this).
@@ -2268,7 +2308,7 @@ local function buildReloader()
     end
     return table.concat({ RELOAD_URL, 'task.wait(8)', restore }, "\n")
 end
-local function doReconnect()
+function doReconnect()
     if reconnecting then return end
     reconnecting = true
     State.status = "reconnecting (quest done)"
