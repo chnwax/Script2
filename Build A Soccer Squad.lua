@@ -350,7 +350,7 @@ task.spawn(function()
             -- same team), reroll = "year" (respin whole team -> new country/year).
             -- Needs a live roll first. RerollRequest is server-limited (1 free per type
             -- per roll + bank, then Robux); when the free/bank is spent the server stops
-            -- answering, so we fall back to RestartRun+RollRequest to keep the hunt going.
+            -- answering, so we STOP the campaign (no auto-restart).
             local rerollArg = (mode == "refresh") and "four" or "year"
             RollRequest:FireServer()
             waitAny({ roll = RollResult, done = RunComplete }, 1.5)
@@ -359,11 +359,10 @@ task.spawn(function()
                 RerollRequest:FireServer(rerollArg)
                 ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.5)
                 if not ev then
-                    -- free reroll + bank exhausted: continue via a fresh run instead of
-                    -- stalling on the paid Robux prompt.
-                    RestartRun:FireServer()
-                    RollRequest:FireServer()
-                    ev, payload = waitAny({ roll = RollResult, done = RunComplete }, 1.5)
+                    -- free reroll + bank exhausted: stop instead of restarting.
+                    State.act = false; pcall(paintAct)
+                    State.actStatus = string.format("STOP: brak rerolli (%d prob)", State.actCount)
+                    break
                 end
                 if not alive() or not State.act then break end
                 if ev == "roll" and type(payload) == "table" and type(payload.reveals) == "table" then
