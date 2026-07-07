@@ -116,6 +116,7 @@ local State = { on = false, status = "off", lastPick = "-", autoBuy = false, fps
     actCountry = "Brazil",  -- English country key (matches RollResult.country)
     actYear = 2026,         -- target year (number)
     actOVR = 103,           -- target OVR+ (used for refresh, and reroll when actTeam=false)
+    actPos = "ANY",         -- restrict OVR target to a specific position ("ANY" = any)
     actMax = 50,            -- max reroll/refresh uses (0 = unlimited)
     actCount = 0,           -- uses spent in current campaign
     actStatus = "",         -- action-panel status line
@@ -333,6 +334,19 @@ local function bestOvr(reveals)
     end
     return mx, best
 end
+-- best OVR among reveals that can play targetSpos. reveals is keyed by broad line
+-- (GK/DEF/MID/FWD), so the key is the card's line for eligibility. "ANY" = no filter.
+local function bestOvrPos(reveals, targetSpos)
+    if not targetSpos or targetSpos == "ANY" then return bestOvr(reveals) end
+    local mx, best = 0, nil
+    for line, v in pairs(reveals) do
+        if type(v) == "table" and type(v.ovr) == "number" and v.ovr > mx
+           and cardEligible(v.name, line, targetSpos) then
+            mx, best = v.ovr, v
+        end
+    end
+    return mx, best
+end
 task.spawn(function()
     while alive() do
         if not State.act then
@@ -367,12 +381,15 @@ task.spawn(function()
                 if not alive() or not State.act then break end
                 if ev == "roll" and type(payload) == "table" and type(payload.reveals) == "table" then
                     State.actCount = State.actCount + 1
-                    local mx, best = bestOvr(payload.reveals)
+                    local mx, best
                     local hit
                     if mode == "reroll" and State.actTeam then
+                        mx, best = bestOvr(payload.reveals)
                         hit = (tostring(payload.country):lower() == tostring(State.actCountry):lower())
                             and (tonumber(payload.year) == State.actYear)
                     else
+                        -- OVR target, optionally restricted to a chosen position
+                        mx, best = bestOvrPos(payload.reveals, State.actPos)
                         hit = mx >= State.actOVR
                     end
                     if hit then
@@ -715,6 +732,58 @@ pcall(function()
     end
 end)
 
+--==================== position eligibility ====================
+-- Cards store only the broad line (GK/DEF/MID/FWD). Player rule: a card can fill
+-- ANY specific slot in its own line (e.g. any attacker plays LW/ST/RW; any mid
+-- plays LM/CM/RM; any defender plays LB/CB/RB). Some cards also cross into another
+-- line -- those exceptions come from WorldCupData.altPos (extracted from the game).
+local SPOS_BY_POS = {
+    GK  = { "GK" },
+    DEF = { "LB", "CB", "RB" },
+    MID = { "LM", "CM", "RM" },
+    FWD = { "LW", "ST", "RW" },
+}
+local POS_OF_SPOS = {
+    GK = "GK",
+    LB = "DEF", CB = "DEF", RB = "DEF",
+    LM = "MID", CM = "MID", RM = "MID",
+    LW = "FWD", ST = "FWD", RW = "FWD",
+}
+local SPOS_ALL = { "GK", "LB", "CB", "RB", "LM", "CM", "RM", "LW", "ST", "RW" }
+-- name -> extra specific positions outside the card's main line (cross-line only)
+local CROSS_POS = {
+    ["A. Sanchez"] = { "LM" }, ["Beckenbauer"] = { "CM" }, ["Breitner"] = { "CM" },
+    ["Burruchaga"] = { "CM" }, ["Cafu"] = { "RM" }, ["Cruyff"] = { "CM" },
+    ["Di Maria"] = { "RM" }, ["Donadoni"] = { "LM" }, ["Haan"] = { "CM" },
+    ["Iniesta"] = { "CM", "LW" }, ["James"] = { "LM" }, ["Messi"] = { "CM" },
+    ["Muller"] = { "RM" }, ["Neymar"] = { "LM" }, ["Palmer"] = { "CM" },
+    ["Perisic"] = { "LM" }, ["Rensenbrink"] = { "LM" }, ["Robben"] = { "RM" },
+    ["Ronaldinho"] = { "LM", "LW" }, ["Ronaldo"] = { "LM" }, ["Saka"] = { "RM" },
+    ["Salah"] = { "RM" }, ["Son"] = { "LM" }, ["Yamal"] = { "RM" }, ["Zinho"] = { "LM" },
+}
+-- ordered specific positions a named card can fill (line set + cross-line extras)
+local function cardSpos(name, pos)
+    local seen, out = {}, {}
+    for _, s in ipairs(SPOS_BY_POS[pos] or { pos }) do
+        if not seen[s] then seen[s] = true; out[#out + 1] = s end
+    end
+    local cx = CROSS_POS[name]
+    if cx then for _, s in ipairs(cx) do if not seen[s] then seen[s] = true; out[#out + 1] = s end end end
+    return out
+end
+-- true if the card can play targetSpos ("ANY"/nil = always true)
+local function cardEligible(name, pos, targetSpos)
+    if not targetSpos or targetSpos == "ANY" then return true end
+    for _, s in ipairs(cardSpos(name, pos)) do if s == targetSpos then return true end end
+    return false
+end
+-- short label for a card's positions: broad line, plus "+CM" style cross extras
+local function posLabel(name, pos)
+    local cx = CROSS_POS[name]
+    if not cx or #cx == 0 then return pos end
+    return pos .. "+" .. table.concat(cx, ",")
+end
+
 -- Polish country names (display only; teamsCY keys stay English)
 local PL = {
     Argentina = "Argentyna", Belgium = "Belgia", Brazil = "Brazylia",
@@ -758,6 +827,7 @@ local STR = {
         actmode = "Tryb", actreroll = "Reroll", actrefresh = "Refresh",
         acttarget = "Cel", acttteam = "Kraj + Rok", acttovr = "OVR+ dowolny",
         actcountry = "Kraj", actyear = "Rok", actovr = "Cel OVR (maks 120)",
+        actpos = "Pozycja", actposany = "dowolna",
         actmax = "Maks uzyc (0 = bez limitu)", actstart = "START", actstop = "STOP",
         actidle = "gotowe",
         tab_auto = "Auto", tab_act = "Akcje", tab_cards = "Karty", tab_quests = "Questy",
@@ -787,6 +857,7 @@ local STR = {
         actmode = "Mode", actreroll = "Reroll", actrefresh = "Refresh",
         acttarget = "Target", acttteam = "Country + Year", acttovr = "Any OVR+",
         actcountry = "Country", actyear = "Year", actovr = "Target OVR (max 120)",
+        actpos = "Position", actposany = "any",
         actmax = "Max uses (0 = unlimited)", actstart = "START", actstop = "STOP",
         actidle = "ready",
         tab_auto = "Auto", tab_act = "Actions", tab_cards = "Cards", tab_quests = "Quests",
@@ -1429,7 +1500,7 @@ local function renderTeam()
             row.TextSize = 13
             row.TextXAlignment = Enum.TextXAlignment.Left
             row.TextColor3 = ovrColor(p.ovr)
-            row.Text = string.format("%2d  %-3s  %s%s", p.ovr, tostring(p.pos),
+            row.Text = string.format("%2d  %-6s  %s%s", p.ovr, posLabel(p.name, p.pos),
                 p.special and "* " or "", tostring(p.name))
             row.LayoutOrder = n
             row.Parent = cardScroll
@@ -1637,7 +1708,15 @@ local function renderBrowse()
     end
     if selectedPos then
         local f = {}
-        for _, r in ipairs(rows) do if r.pos == selectedPos then f[#f + 1] = r end end
+        for _, r in ipairs(rows) do
+            -- show a card under a line if it can play any specific slot in that line
+            -- (its own line, or a cross-line position from CROSS_POS)
+            local reach = false
+            for _, s in ipairs(cardSpos(r.name, r.pos)) do
+                if POS_OF_SPOS[s] == selectedPos then reach = true; break end
+            end
+            if reach then f[#f + 1] = r end
+        end
         rows = f
     end
     table.sort(rows, function(a, b)
@@ -1654,7 +1733,7 @@ local function renderBrowse()
         row.TextSize = 12
         row.TextXAlignment = Enum.TextXAlignment.Left
         row.TextColor3 = ovrColor(p.ovr)
-        row.Text = string.format("%2d  %-3s  %s%s  '%s", p.ovr, tostring(p.pos),
+        row.Text = string.format("%2d  %-6s  %s%s  '%s", p.ovr, posLabel(p.name, p.pos),
             p.special and "* " or "", tostring(p.name), string.sub(tostring(p.year), -2))
         row.LayoutOrder = i
         row.Parent = brCardScroll
@@ -2271,6 +2350,65 @@ local function apNumBox(holder, getVal, commit)
     return box
 end
 
+-- dropdown on a labeled row: click the value button to expand a scrollable list,
+-- click an option to select + collapse. options = array of values; labelOf(v)->text.
+local function apDrop(holder, y, options, getCur, labelOf, onPick)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -88 - 10, 0, 22); btn.Position = UDim2.new(0, 88, 0.5, -11)
+    btn.BackgroundColor3 = Color3.fromRGB(70, 76, 72); btn.TextColor3 = Color3.fromRGB(245, 245, 245)
+    btn.Font = Enum.Font.GothamSemibold; btn.TextSize = 12; btn.AutoButtonColor = true
+    btn.TextXAlignment = Enum.TextXAlignment.Left; btn.Parent = holder
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    do local p = Instance.new("UIPadding", btn); p.PaddingLeft = UDim.new(0, 8); p.PaddingRight = UDim.new(0, 22) end
+    local arrow = Instance.new("TextLabel")
+    arrow.Size = UDim2.fromOffset(18, 22); arrow.Position = UDim2.new(1, -20, 0.5, -11)
+    arrow.BackgroundTransparency = 1; arrow.Text = "v"; arrow.TextColor3 = Color3.fromRGB(200, 210, 205)
+    arrow.Font = Enum.Font.GothamBold; arrow.TextSize = 12; arrow.Parent = btn
+
+    -- expandable list overlay (parented to ap, floats above other rows)
+    local rows = math.min(#options, 6)
+    local list = Instance.new("ScrollingFrame")
+    list.Visible = false; list.Active = true
+    list.Size = UDim2.new(1, -98, 0, rows * 24 + 8)
+    list.Position = UDim2.fromOffset(88, y + 24)
+    list.BackgroundColor3 = Color3.fromRGB(40, 45, 42); list.BorderSizePixel = 0
+    list.ScrollBarThickness = 4; list.CanvasSize = UDim2.new(0, 0, 0, #options * 24 + 4)
+    list.ZIndex = 50; list.Parent = ap
+    Instance.new("UICorner", list).CornerRadius = UDim.new(0, 6)
+    do local lay = Instance.new("UIListLayout", list); lay.Padding = UDim.new(0, 2); lay.SortOrder = Enum.SortOrder.LayoutOrder
+       local p = Instance.new("UIPadding", list); p.PaddingTop = UDim.new(0, 2); p.PaddingLeft = UDim.new(0, 2); p.PaddingRight = UDim.new(0, 2) end
+
+    local function paint() btn.Text = labelOf(getCur()) end
+    local optBtns = {}
+    for i, v in ipairs(options) do
+        local ob = Instance.new("TextButton")
+        ob.Size = UDim2.new(1, -4, 0, 22); ob.LayoutOrder = i
+        ob.BackgroundColor3 = Color3.fromRGB(58, 64, 60); ob.TextColor3 = Color3.fromRGB(235, 240, 236)
+        ob.Font = Enum.Font.Gotham; ob.TextSize = 12; ob.AutoButtonColor = true
+        ob.Text = labelOf(v); ob.TextXAlignment = Enum.TextXAlignment.Left; ob.ZIndex = 51
+        ob.Parent = list; Instance.new("UICorner", ob).CornerRadius = UDim.new(0, 5)
+        do local p = Instance.new("UIPadding", ob); p.PaddingLeft = UDim.new(0, 8) end
+        optBtns[i] = ob
+        ob.MouseButton1Click:Connect(function()
+            onPick(v); paint(); list.Visible = false; arrow.Text = "v"
+        end)
+    end
+    local function highlight()
+        local cur = getCur()
+        for i, v in ipairs(options) do
+            optBtns[i].BackgroundColor3 = (v == cur) and ACCENT or Color3.fromRGB(58, 64, 60)
+            optBtns[i].TextColor3 = (v == cur) and Color3.fromRGB(20, 24, 22) or Color3.fromRGB(235, 240, 236)
+        end
+    end
+    btn.MouseButton1Click:Connect(function()
+        list.Visible = not list.Visible
+        arrow.Text = list.Visible and "^" or "v"
+        if list.Visible then highlight() end
+    end)
+    paint()
+    return paint, btn
+end
+
 -- country + year cycler indices (over the sorted lists already built above)
 local acCountryIdx = 1
 for i, c in ipairs(countryNames) do if c == State.actCountry then acCountryIdx = i; break end end
@@ -2281,11 +2419,15 @@ do local ys = acYears(); for i, y in ipairs(ys) do if y == State.actYear then ac
 
 -- build rows
 local rMode   = apRow(36,  "actmode")
-local rTgt    = apRow(70,  "acttarget")
-local rCountry= apRow(104, "actcountry")
-local rYear   = apRow(138, "actyear")
-local rOvr    = apRow(172, "actovr")
-local rMax    = apRow(206, "actmax")
+local rTgt    = apRow(68,  "acttarget")
+local rCountry= apRow(100, "actcountry")
+local rYear   = apRow(132, "actyear")
+local rOvr    = apRow(164, "actovr")
+local rPos    = apRow(196, "actpos")
+local rMax    = apRow(228, "actmax")
+
+-- position options over {"ANY"} + SPOS_ALL
+local acPosList = {"ANY"}; for _, s in ipairs(SPOS_ALL) do acPosList[#acPosList + 1] = s end
 
 local paintMode = apSeg(rMode, "actreroll", "actrefresh",
     function() return State.actMode == "reroll" end,
@@ -2308,6 +2450,11 @@ local paintYear = apCycler(rYear,
     function() local ys = acYears(); acYearIdx = ((acYearIdx - 2) % #ys) + 1; State.actYear = ys[acYearIdx] end,
     function() local ys = acYears(); acYearIdx = (acYearIdx % #ys) + 1; State.actYear = ys[acYearIdx] end)
 
+local paintPos = apDrop(rPos, 196, acPosList,
+    function() return State.actPos end,
+    function(v) return (v == "ANY") and tr("actposany") or v end,
+    function(v) State.actPos = v; if paintAct then paintAct() end end)
+
 apNumBox(rOvr, function() return State.actOVR end, function(t)
     local v = tonumber((t:gsub("%D", ""))) or State.actOVR
     if v < 80 then v = 80 elseif v > 120 then v = 120 end
@@ -2319,21 +2466,21 @@ apNumBox(rMax, function() return State.actMax end, function(t)
 
 -- START / STOP buttons
 local startBtn = Instance.new("TextButton")
-startBtn.Size = UDim2.new(0.5, -14, 0, 30); startBtn.Position = UDim2.fromOffset(10, 244)
+startBtn.Size = UDim2.new(0.5, -14, 0, 30); startBtn.Position = UDim2.fromOffset(10, 262)
 startBtn.BackgroundColor3 = ACCENT; startBtn.Text = tr("actstart")
 startBtn.TextColor3 = Color3.fromRGB(18, 22, 20); startBtn.Font = Enum.Font.GothamBold
 startBtn.TextSize = 14; startBtn.AutoButtonColor = true; startBtn.Parent = ap
 Instance.new("UICorner", startBtn).CornerRadius = UDim.new(0, 8)
 
 local stopBtn = Instance.new("TextButton")
-stopBtn.Size = UDim2.new(0.5, -14, 0, 30); stopBtn.Position = UDim2.new(0.5, 4, 0, 244)
+stopBtn.Size = UDim2.new(0.5, -14, 0, 30); stopBtn.Position = UDim2.new(0.5, 4, 0, 262)
 stopBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60); stopBtn.Text = tr("actstop")
 stopBtn.TextColor3 = Color3.fromRGB(245, 235, 235); stopBtn.Font = Enum.Font.GothamBold
 stopBtn.TextSize = 14; stopBtn.AutoButtonColor = true; stopBtn.Parent = ap
 Instance.new("UICorner", stopBtn).CornerRadius = UDim.new(0, 8)
 
 local apStatus = Instance.new("TextLabel")
-apStatus.Size = UDim2.new(1, -20, 0, 90); apStatus.Position = UDim2.fromOffset(10, 284)
+apStatus.Size = UDim2.new(1, -20, 0, 72); apStatus.Position = UDim2.fromOffset(10, 298)
 apStatus.BackgroundColor3 = BG2; apStatus.BackgroundTransparency = 0.3
 apStatus.Text = tr("actidle"); apStatus.TextColor3 = Color3.fromRGB(200, 210, 205)
 apStatus.Font = Enum.Font.Gotham; apStatus.TextSize = 12; apStatus.TextWrapped = true
@@ -2351,12 +2498,14 @@ end)
 paintAct = function()
     local running = State.act
     local teamMode = (State.actMode == "reroll") and State.actTeam
-    paintMode(); paintTgt(); paintCountry(); paintYear()
+    paintMode(); paintTgt(); paintCountry(); paintYear(); paintPos()
     -- country/year only apply to reroll + team-target; gray them otherwise
     local dimC = teamMode and 0 or 0.55
     rCountry.BackgroundTransparency = dimC; rYear.BackgroundTransparency = dimC
     -- target selector only meaningful for reroll
     rTgt.BackgroundTransparency = (State.actMode == "reroll") and 0 or 0.55
+    -- position filter only applies to OVR target (not team-target reroll)
+    rPos.BackgroundTransparency = teamMode and 0.55 or 0
     startBtn.BackgroundColor3 = running and Color3.fromRGB(70, 76, 72) or ACCENT
     startBtn.Text = running and (tr("actstart") .. "...") or tr("actstart")
     if State.actStatus ~= "" then apStatus.Text = State.actStatus end
