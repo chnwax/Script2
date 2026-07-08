@@ -114,12 +114,19 @@ local cycles  = 0
 local statusText = "gotowy"
 
 --// ================= AUTO LOOP =================
-local function pickWater(waters)
-	local best, bestAmt
+-- pick the water source CLOSEST to the pump (the start-area spring by the
+-- fill), not the far undiscovered wells.
+local function pickWater(waters, refPos)
+	local best, bestDist
 	for _, w in ipairs(waters) do
-		local a = w.amount.Value
-		if a > 0 and (not bestAmt or a > bestAmt) then
-			best, bestAmt = w, a
+		if w.amount.Value > 0 then
+			local wp = partPos(w.model)
+			if wp then
+				local d = refPos and (wp - refPos).Magnitude or 0
+				if not bestDist or d < bestDist then
+					best, bestDist = w, d
+				end
+			end
 		end
 	end
 	return best
@@ -145,7 +152,7 @@ task.spawn(function()
 					task.wait(0.3)
 				else
 					local waters = getWaters()
-					local w = pickWater(waters)
+					local w = pickWater(waters, pumpPos)
 					if not w then
 						statusText = "brak wody - czekam"
 						task.wait(0.5)
