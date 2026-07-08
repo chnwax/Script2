@@ -112,6 +112,7 @@ end
 local running = false
 local cycles  = 0
 local statusText = "gotowy"
+local walkSpeed = 16
 
 --// ================= AUTO LOOP =================
 -- pick the water source CLOSEST to the pump (the start-area spring by the
@@ -199,7 +200,7 @@ local main = Instance.new("Frame")
 main.Name = "Main"
 main.AnchorPoint = Vector2.new(0.5, 0.5)
 main.Position = UDim2.new(0.5, 0, 0.42, 0)
-main.Size = UDim2.new(0, 268, 0, 168)
+main.Size = UDim2.new(0, 268, 0, 216)
 main.BackgroundColor3 = C.bg
 main.BorderSizePixel = 0
 main.Parent = gui
@@ -278,10 +279,104 @@ knob.BorderSizePixel = 0
 knob.Parent = switch
 Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
+-- walkspeed card
+local WS_MIN, WS_MAX = 16, 150
+local wsCard = Instance.new("Frame")
+wsCard.Position = UDim2.new(0, 14, 0, 108)
+wsCard.Size = UDim2.new(1, -28, 0, 46)
+wsCard.BackgroundColor3 = C.card
+wsCard.BorderSizePixel = 0
+wsCard.Parent = main
+Instance.new("UICorner", wsCard).CornerRadius = UDim.new(0, 10)
+
+local wsLabel = Instance.new("TextLabel")
+wsLabel.BackgroundTransparency = 1
+wsLabel.Position = UDim2.new(0, 14, 0, 4)
+wsLabel.Size = UDim2.new(1, -28, 0, 16)
+wsLabel.Font = Enum.Font.GothamMedium
+wsLabel.Text = "Predkosc chodzenia: 16"
+wsLabel.TextColor3 = C.txt
+wsLabel.TextSize = 13
+wsLabel.TextXAlignment = Enum.TextXAlignment.Left
+wsLabel.Parent = wsCard
+
+local track = Instance.new("Frame")
+track.Position = UDim2.new(0, 14, 0, 28)
+track.Size = UDim2.new(1, -28, 0, 6)
+track.BackgroundColor3 = C.accOff
+track.BorderSizePixel = 0
+track.Parent = wsCard
+Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+local fill = Instance.new("Frame")
+fill.Size = UDim2.new(0, 0, 1, 0)
+fill.BackgroundColor3 = C.acc
+fill.BorderSizePixel = 0
+fill.Parent = track
+Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+local wsKnob = Instance.new("TextButton")
+wsKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+wsKnob.Position = UDim2.new(0, 0, 0.5, 0)
+wsKnob.Size = UDim2.new(0, 16, 0, 16)
+wsKnob.BackgroundColor3 = Color3.fromRGB(240, 240, 245)
+wsKnob.Text = ""
+wsKnob.AutoButtonColor = false
+wsKnob.Parent = track
+Instance.new("UICorner", wsKnob).CornerRadius = UDim.new(1, 0)
+
+local function applyWsUI(alpha)
+	alpha = math.clamp(alpha, 0, 1)
+	walkSpeed = math.floor(WS_MIN + (WS_MAX - WS_MIN) * alpha + 0.5)
+	fill.Size = UDim2.new(alpha, 0, 1, 0)
+	wsKnob.Position = UDim2.new(alpha, 0, 0.5, 0)
+	wsLabel.Text = "Predkosc chodzenia: " .. walkSpeed
+end
+applyWsUI(0) -- start at 16
+
+local wsDrag = false
+local function updFromX(px)
+	local rel = (px - track.AbsolutePosition.X) / track.AbsoluteSize.X
+	applyWsUI(rel)
+end
+wsKnob.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+		wsDrag = true
+	end
+end)
+track.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+		wsDrag = true
+		updFromX(i.Position.X)
+	end
+end)
+UserInputS.InputEnded:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+		wsDrag = false
+	end
+end)
+UserInputS.InputChanged:Connect(function(i)
+	if wsDrag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+		updFromX(i.Position.X)
+	end
+end)
+
+-- keep the chosen walkspeed applied (game/respawn resets it)
+task.spawn(function()
+	while true do
+		local c = getChar()
+		local hum = c and c:FindFirstChildWhichIsA("Humanoid")
+		if hum and math.abs(hum.WalkSpeed - walkSpeed) > 0.5 then
+			pcall(function() hum.WalkSpeed = walkSpeed end)
+		end
+		task.wait(0.25)
+	end
+end)
+
 -- status
 local status = Instance.new("TextLabel")
 status.BackgroundTransparency = 1
-status.Position = UDim2.new(0, 16, 0, 110)
+status.Position = UDim2.new(0, 16, 0, 162)
 status.Size = UDim2.new(1, -32, 0, 20)
 status.Font = Enum.Font.Gotham
 status.Text = "gotowy"
@@ -292,7 +387,7 @@ status.Parent = main
 
 local counter = Instance.new("TextLabel")
 counter.BackgroundTransparency = 1
-counter.Position = UDim2.new(0, 16, 0, 134)
+counter.Position = UDim2.new(0, 16, 0, 184)
 counter.Size = UDim2.new(1, -32, 0, 20)
 counter.Font = Enum.Font.GothamMedium
 counter.Text = "Cykle: 0"
@@ -353,6 +448,6 @@ end)
 --// ---- entrance pop ----
 main.Size = UDim2.new(0, 0, 0, 0)
 TweenService:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-	{ Size = UDim2.new(0, 268, 0, 168) }):Play()
+	{ Size = UDim2.new(0, 268, 0, 216) }):Play()
 
 print("[IceTycoon2Auto] loaded - toggle Auto Scoop + Fill w UI")
