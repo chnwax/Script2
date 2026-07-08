@@ -163,9 +163,9 @@ task.spawn(function()
 						statusText = "scooping..."
 						hold(partPos(w.model), 3)
 						fireUntil(w.prompt, w.amount, true)
-						-- fill: pin at pump, fire until pump Amount rises
+						-- fill: pin BESIDE the pump (not dead center), fire until rises
 						statusText = "filling pump..."
-						hold(pumpPos, 3)
+						hold(pumpPos + Vector3.new(4, 0, 4), 3)
 						fireUntil(pump.prompt, pump.amount, false)
 						cycles = cycles + 1
 					end
