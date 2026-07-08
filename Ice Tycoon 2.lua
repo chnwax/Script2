@@ -197,7 +197,7 @@ gui.IgnoreGuiInset = true
 pcall(function() gui.Parent = game:GetService("CoreGui") end)
 if not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
-local MAIN_W, FULL_H, MIN_H = 226, 210, 32
+local MAIN_W, FULL_H, MIN_H = 226, 246, 32
 
 local main = Instance.new("Frame")
 main.Name = "Main"
@@ -427,10 +427,68 @@ RunService.Heartbeat:Connect(function()
 	end
 end)
 
+-- find gems button
+local findBtn = Instance.new("TextButton")
+findBtn.Position = UDim2.new(0, 12, 0, 172)
+findBtn.Size = UDim2.new(1, -24, 0, 30)
+findBtn.BackgroundColor3 = C.card
+findBtn.Text = "Find Gems (5)"
+findBtn.Font = Enum.Font.GothamMedium
+findBtn.TextColor3 = C.acc
+findBtn.TextSize = 13
+findBtn.AutoButtonColor = true
+findBtn.Parent = main
+Instance.new("UICorner", findBtn).CornerRadius = UDim.new(0, 9)
+
+local findBusy = false
+local function findGems()
+	if findBusy then return end
+	local hrp = getHRP()
+	local troops = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Troops")
+	local peds = troops and troops:FindFirstChild("GemPedestals")
+	if not hrp or not peds then
+		statusText = "no gem pedestals"
+		return
+	end
+	findBusy = true
+	findBtn.Text = "Finding..."
+	local save = hrp.CFrame
+	local list = peds:GetChildren()
+	for i, ped in ipairs(list) do
+		local hb = ped:FindFirstChild("Hitbox")
+		if hb then
+			statusText = "gem " .. i .. "/" .. #list
+			local target = CFrame.new(hb.Position + Vector3.new(0, 3, 0))
+			for _ = 1, 10 do
+				hrp = getHRP()
+				if not hrp then break end
+				hrp.CFrame = target
+				pcall(function()
+					firetouchinterest(hrp, hb, 0)
+					firetouchinterest(hrp, hb, 1)
+				end)
+				RunService.Heartbeat:Wait()
+			end
+		end
+	end
+	-- return to start spot
+	for _ = 1, 8 do
+		hrp = getHRP()
+		if hrp then hrp.CFrame = save end
+		RunService.Heartbeat:Wait()
+	end
+	statusText = "gems collected"
+	findBtn.Text = "Find Gems (5)"
+	findBusy = false
+end
+findBtn.MouseButton1Click:Connect(function()
+	task.spawn(findGems)
+end)
+
 -- status
 local status = Instance.new("TextLabel")
 status.BackgroundTransparency = 1
-status.Position = UDim2.new(0, 12, 0, 174)
+status.Position = UDim2.new(0, 12, 0, 210)
 status.Size = UDim2.new(1, -24, 0, 16)
 status.Font = Enum.Font.Gotham
 status.Text = "ready"
@@ -441,7 +499,7 @@ status.Parent = main
 
 local counter = Instance.new("TextLabel")
 counter.BackgroundTransparency = 1
-counter.Position = UDim2.new(0, 12, 0, 190)
+counter.Position = UDim2.new(0, 12, 0, 226)
 counter.Size = UDim2.new(1, -24, 0, 16)
 counter.Font = Enum.Font.GothamMedium
 counter.Text = "Cycles: 0"
@@ -574,6 +632,7 @@ local function setMinimized(v)
 	card.Visible = not v
 	flyCard.Visible = not v
 	wsCard.Visible = not v
+	findBtn.Visible = not v
 	status.Visible = not v
 	counter.Visible = not v
 	minBtn.Text = v and "+" or "-"
