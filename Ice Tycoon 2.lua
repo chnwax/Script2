@@ -111,7 +111,7 @@ end
 --// ================= STATE =================
 local running = false
 local cycles  = 0
-local statusText = "gotowy"
+local statusText = "ready"
 local walkSpeed = 16
 local flying = false
 
@@ -139,10 +139,10 @@ task.spawn(function()
 		if running then
 			local pump = getPump()
 			if not canPlay() then
-				statusText = "czekam (nie mozna grac)"
+				statusText = "waiting (cant play)"
 				task.wait(0.3)
 			elseif not (pump and pump.prompt and pump.amount) then
-				statusText = "brak pompy"
+				statusText = "no pump"
 				task.wait(0.5)
 			else
 				local pumpPos = partPos(pump.model:FindFirstChild("Main")) or partPos(pump.model)
@@ -150,21 +150,21 @@ task.spawn(function()
 
 				-- wait if pump full (dropper draining)
 				if pump.amount.Value >= maxV then
-					statusText = "pompa pelna - czekam"
+					statusText = "pump full - waiting"
 					task.wait(0.3)
 				else
 					local waters = getWaters()
 					local w = pickWater(waters, pumpPos)
 					if not w then
-						statusText = "brak wody - czekam"
+						statusText = "no water - waiting"
 						task.wait(0.5)
 					else
 						-- scoop: pin at water, fire until water Amount drops
-						statusText = "nabieram wode..."
+						statusText = "scooping..."
 						hold(partPos(w.model), 3)
 						fireUntil(w.prompt, w.amount, true)
 						-- fill: pin at pump, fire until pump Amount rises
-						statusText = "wlewam do pompy..."
+						statusText = "filling pump..."
 						hold(pumpPos, 3)
 						fireUntil(pump.prompt, pump.amount, false)
 						cycles = cycles + 1
@@ -309,9 +309,9 @@ flyLabel.BackgroundTransparency = 1
 flyLabel.Position = UDim2.new(0, 12, 0, 0)
 flyLabel.Size = UDim2.new(1, -70, 1, 0)
 flyLabel.Font = Enum.Font.GothamMedium
-flyLabel.Text = "Latanie (WASD/Spc/Ctrl)"
+flyLabel.Text = "Fly (WASD/Spc/Ctrl)"
 flyLabel.TextColor3 = C.txt
-flyLabel.TextSize = 13
+flyLabel.TextSize = 11
 flyLabel.TextXAlignment = Enum.TextXAlignment.Left
 flyLabel.Parent = flyCard
 
@@ -349,7 +349,7 @@ wsLabel.BackgroundTransparency = 1
 wsLabel.Position = UDim2.new(0, 12, 0, 4)
 wsLabel.Size = UDim2.new(1, -24, 0, 15)
 wsLabel.Font = Enum.Font.GothamMedium
-wsLabel.Text = "Predkosc chodzenia: 16"
+wsLabel.Text = "Walk speed: 16"
 wsLabel.TextColor3 = C.txt
 wsLabel.TextSize = 12
 wsLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -385,7 +385,7 @@ local function applyWsUI(alpha)
 	walkSpeed = math.floor(WS_MIN + (WS_MAX - WS_MIN) * alpha + 0.5)
 	fill.Size = UDim2.new(alpha, 0, 1, 0)
 	wsKnob.Position = UDim2.new(alpha, 0, 0.5, 0)
-	wsLabel.Text = "Predkosc chodzenia: " .. walkSpeed
+	wsLabel.Text = "Walk speed: " .. walkSpeed
 end
 applyWsUI(0) -- start at 16
 
@@ -433,7 +433,7 @@ status.BackgroundTransparency = 1
 status.Position = UDim2.new(0, 12, 0, 174)
 status.Size = UDim2.new(1, -24, 0, 16)
 status.Font = Enum.Font.Gotham
-status.Text = "gotowy"
+status.Text = "ready"
 status.TextColor3 = C.sub
 status.TextSize = 12
 status.TextXAlignment = Enum.TextXAlignment.Left
@@ -444,7 +444,7 @@ counter.BackgroundTransparency = 1
 counter.Position = UDim2.new(0, 12, 0, 190)
 counter.Size = UDim2.new(1, -24, 0, 16)
 counter.Font = Enum.Font.GothamMedium
-counter.Text = "Cykle: 0"
+counter.Text = "Cycles: 0"
 counter.TextColor3 = C.acc
 counter.TextSize = 12
 counter.TextXAlignment = Enum.TextXAlignment.Left
@@ -467,7 +467,7 @@ local function setRunning(v)
 	TweenService:Create(switch, TweenInfo.new(0.18), { BackgroundColor3 = goalBg }):Play()
 	TweenService:Create(knob, TweenInfo.new(0.18, Enum.EasingStyle.Quad), { Position = goalPos }):Play()
 	if not v then
-		statusText = "gotowy"
+		statusText = "ready"
 		-- teleport back to where it was turned on
 		if runStartCFrame then
 			task.spawn(function()
@@ -588,7 +588,7 @@ end)
 --// ---- status refresh ----
 RunService.RenderStepped:Connect(function()
 	if status.Text ~= statusText then status.Text = statusText end
-	local cText = "Cykle: " .. cycles
+	local cText = "Cycles: " .. cycles
 	if counter.Text ~= cText then counter.Text = cText end
 end)
 
@@ -618,4 +618,4 @@ main.Size = UDim2.new(0, 0, 0, 0)
 TweenService:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
 	{ Size = UDim2.new(0, MAIN_W, 0, FULL_H) }):Play()
 
-print("[IceTycoon2Auto] loaded - toggle Auto Scoop + Fill w UI")
+print("[IceTycoon2Auto] loaded - toggle Auto Scoop + Fill in UI")
