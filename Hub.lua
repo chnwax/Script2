@@ -237,58 +237,85 @@ local layout = Instance.new("UIListLayout", scroll)
 layout.Padding = UDim.new(0, 8)
 layout.SortOrder = Enum.SortOrder.LayoutOrder
 
---==================== executing overlay + animation ====================
-local overlay = Instance.new("Frame")
-overlay.Size = UDim2.fromScale(1, 1)
-overlay.BackgroundColor3 = C.bg
-overlay.BackgroundTransparency = 1
-overlay.Visible = false
-overlay.ZIndex = 20
-overlay.Parent = main
+--==================== FULLSCREEN executing overlay ====================
+-- covers the whole screen (parented to gui, not the panel) with a dark backdrop,
+-- a Lighting blur, and a centered name + sweep bar.
+local fs = Instance.new("Frame")
+fs.Size = UDim2.fromScale(1, 1)
+fs.Position = UDim2.fromScale(0, 0)
+fs.BackgroundColor3 = Color3.fromRGB(6, 6, 9)
+fs.BackgroundTransparency = 1
+fs.Visible = false
+fs.ZIndex = 50
+fs.Parent = gui
+-- radial-ish accent vignette via gradient
+do
+    local g = Instance.new("UIGradient", fs)
+    g.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 16, 40)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(6, 6, 9)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(16, 22, 40)),
+    })
+    g.Rotation = 90
+end
 
-local ovTitle = Instance.new("TextLabel")
-ovTitle.Size = UDim2.new(1, -40, 0, 22)
-ovTitle.Position = UDim2.new(0, 20, 0.5, -34)
-ovTitle.BackgroundTransparency = 1
-ovTitle.Text = ""
-ovTitle.TextColor3 = C.txt
-ovTitle.Font = Enum.Font.GothamBold
-ovTitle.TextSize = 16
-ovTitle.ZIndex = 21
-ovTitle.TextTransparency = 1
-ovTitle.Parent = overlay
+local blur = Instance.new("BlurEffect")
+blur.Size = 0
+blur.Enabled = false
+pcall(function() blur.Parent = game:GetService("Lighting") end)
 
-local ovState = Instance.new("TextLabel")
-ovState.Size = UDim2.new(1, -40, 0, 16)
-ovState.Position = UDim2.new(0, 20, 0.5, -12)
-ovState.BackgroundTransparency = 1
-ovState.Text = "uruchamiam..."
-ovState.TextColor3 = C.sub
-ovState.Font = Enum.Font.Gotham
-ovState.TextSize = 12
-ovState.ZIndex = 21
-ovState.TextTransparency = 1
-ovState.Parent = overlay
+local holder = Instance.new("Frame")
+holder.AnchorPoint = Vector2.new(0.5, 0.5)
+holder.Position = UDim2.fromScale(0.5, 0.5)
+holder.Size = UDim2.fromOffset(480, 140)
+holder.BackgroundTransparency = 1
+holder.ZIndex = 51
+holder.Parent = fs
 
--- indeterminate sweep bar
+local fsName = Instance.new("TextLabel")
+fsName.Size = UDim2.new(1, 0, 0, 30)
+fsName.Position = UDim2.fromOffset(0, 20)
+fsName.BackgroundTransparency = 1
+fsName.Text = ""
+fsName.TextColor3 = C.txt
+fsName.Font = Enum.Font.GothamBold
+fsName.TextSize = 26
+fsName.TextTransparency = 1
+fsName.ZIndex = 51
+fsName.Parent = holder
+
+local fsState = Instance.new("TextLabel")
+fsState.Size = UDim2.new(1, 0, 0, 18)
+fsState.Position = UDim2.fromOffset(0, 56)
+fsState.BackgroundTransparency = 1
+fsState.Text = "uruchamiam..."
+fsState.TextColor3 = C.sub
+fsState.Font = Enum.Font.Gotham
+fsState.TextSize = 14
+fsState.TextTransparency = 1
+fsState.ZIndex = 51
+fsState.Parent = holder
+
 local track = Instance.new("Frame")
-track.Size = UDim2.new(1, -80, 0, 4)
-track.Position = UDim2.new(0, 40, 0.5, 16)
-track.BackgroundColor3 = C.card
+track.AnchorPoint = Vector2.new(0.5, 0)
+track.Size = UDim2.fromOffset(300, 5)
+track.Position = UDim2.new(0.5, 0, 0, 92)
+track.BackgroundColor3 = Color3.fromRGB(40, 40, 52)
 track.BorderSizePixel = 0
-track.ZIndex = 21
 track.BackgroundTransparency = 1
-track.Parent = overlay
-corner(track, 2)
+track.ClipsDescendants = true
+track.ZIndex = 51
+track.Parent = holder
+corner(track, 3)
 
 local sweep = Instance.new("Frame")
 sweep.Size = UDim2.new(0.35, 0, 1, 0)
 sweep.BackgroundColor3 = C.acc
 sweep.BorderSizePixel = 0
-sweep.ZIndex = 22
 sweep.BackgroundTransparency = 1
+sweep.ZIndex = 52
 sweep.Parent = track
-corner(sweep, 2)
+corner(sweep, 3)
 do
     local g = Instance.new("UIGradient", sweep)
     g.Color = ColorSequence.new(C.acc, C.acc2)
@@ -309,30 +336,49 @@ local function startSweep()
     end)
 end
 
+local function fadeFsOut()
+    sweeping = false
+    Tween:Create(fs, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
+    Tween:Create(blur, TweenInfo.new(0.3), { Size = 0 }):Play()
+    for _, o in ipairs({ fsName, fsState }) do
+        Tween:Create(o, TweenInfo.new(0.25), { TextTransparency = 1 }):Play()
+    end
+    for _, o in ipairs({ track, sweep }) do
+        pcall(function() Tween:Create(o, TweenInfo.new(0.25), { BackgroundTransparency = 1 }):Play() end)
+    end
+    task.delay(0.32, function() fs.Visible = false; blur.Enabled = false end)
+end
+
 --==================== run + close ====================
 local running = false
 local function closeHub()
-    sweeping = false
     local t = Tween:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In),
         { Size = UDim2.fromOffset(0, 0) })
     t:Play()
-    t.Completed:Connect(function() gui:Destroy() end)
+    t.Completed:Connect(function()
+        sweeping = false
+        pcall(function() blur:Destroy() end)
+        gui:Destroy()
+    end)
 end
 
 local function runScript(name)
     if running then return end
     running = true
-    -- reveal overlay + animation
-    overlay.Visible = true
-    ovTitle.Text = label(name)
-    ovState.Text = "uruchamiam..."
-    ovState.TextColor3 = C.sub
-    Tween:Create(overlay, TweenInfo.new(0.2), { BackgroundTransparency = 0.05 }):Play()
-    for _, o in ipairs({ ovTitle, ovState }) do
-        Tween:Create(o, TweenInfo.new(0.25), { TextTransparency = 0 }):Play()
+    main.Visible = false                     -- hide panel; fullscreen takes over
+    fs.Visible = true
+    fsName.Text = label(name)
+    fsState.Text = "uruchamiam..."
+    fsState.TextColor3 = C.sub
+    sweep.BackgroundColor3 = C.acc
+    blur.Enabled = true
+    Tween:Create(fs, TweenInfo.new(0.3), { BackgroundTransparency = 0.12 }):Play()
+    Tween:Create(blur, TweenInfo.new(0.35), { Size = 22 }):Play()
+    for _, o in ipairs({ fsName, fsState }) do
+        Tween:Create(o, TweenInfo.new(0.3), { TextTransparency = 0 }):Play()
     end
-    Tween:Create(track, TweenInfo.new(0.25), { BackgroundTransparency = 0 }):Play()
-    Tween:Create(sweep, TweenInfo.new(0.25), { BackgroundTransparency = 0 }):Play()
+    Tween:Create(track, TweenInfo.new(0.3), { BackgroundTransparency = 0 }):Play()
+    Tween:Create(sweep, TweenInfo.new(0.3), { BackgroundTransparency = 0 }):Play()
     startSweep()
 
     task.spawn(function()
@@ -347,23 +393,18 @@ local function runScript(name)
         sweeping = false
         if ok then
             sweep.Size = UDim2.new(1, 0, 1, 0); sweep.Position = UDim2.new(0, 0, 0, 0)
-            ovState.Text = "gotowe"; ovState.TextColor3 = C.acc2
-            task.wait(0.5)
+            fsState.Text = "gotowe"; fsState.TextColor3 = C.acc2
+            task.wait(0.6)
+            fadeFsOut()
             closeHub()
         else
             sweep.BackgroundColor3 = Color3.fromRGB(230, 90, 90)
-            ovState.Text = "blad: " .. tostring(err):sub(1, 26)
-            ovState.TextColor3 = Color3.fromRGB(240, 120, 120)
-            running = false
+            fsState.Text = "blad: " .. tostring(err):sub(1, 30)
+            fsState.TextColor3 = Color3.fromRGB(240, 120, 120)
             task.wait(2.2)
-            -- retreat overlay so user can pick again
-            Tween:Create(overlay, TweenInfo.new(0.2), { BackgroundTransparency = 1 }):Play()
-            for _, o in ipairs({ ovTitle, ovState, track, sweep }) do
-                pcall(function() Tween:Create(o, TweenInfo.new(0.2),
-                    { TextTransparency = 1, BackgroundTransparency = 1 }):Play() end)
-            end
-            task.wait(0.2); overlay.Visible = false
-            sweep.BackgroundColor3 = C.acc
+            fadeFsOut()
+            main.Visible = true              -- bring panel back so user can retry
+            running = false
         end
     end)
 end
