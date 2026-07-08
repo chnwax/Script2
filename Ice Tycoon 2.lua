@@ -437,7 +437,14 @@ counter.TextXAlignment = Enum.TextXAlignment.Left
 counter.Parent = main
 
 --// ---- toggle behaviour ----
+local runStartCFrame  -- where auto was switched ON
+
 local function setRunning(v)
+	if v then
+		-- remember spot where we turned it on
+		local hrp = getHRP()
+		runStartCFrame = hrp and hrp.CFrame or nil
+	end
 	running = v
 	local goalBg = v and C.on or C.accOff
 	local goalPos = v and UDim2.new(1, -23, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
@@ -445,7 +452,19 @@ local function setRunning(v)
 	knob.AnchorPoint = anchor
 	TweenService:Create(switch, TweenInfo.new(0.18), { BackgroundColor3 = goalBg }):Play()
 	TweenService:Create(knob, TweenInfo.new(0.18, Enum.EasingStyle.Quad), { Position = goalPos }):Play()
-	if not v then statusText = "gotowy" end
+	if not v then
+		statusText = "gotowy"
+		-- teleport back to where it was turned on
+		if runStartCFrame then
+			task.spawn(function()
+				for _ = 1, 6 do
+					local hrp = getHRP()
+					if hrp then hrp.CFrame = runStartCFrame end
+					RunService.Heartbeat:Wait()
+				end
+			end)
+		end
+	end
 end
 
 switch.MouseButton1Click:Connect(function()
