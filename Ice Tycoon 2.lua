@@ -113,6 +113,7 @@ local running = false
 local cycles  = 0
 local statusText = "gotowy"
 local walkSpeed = 16
+local flying = false
 
 --// ================= AUTO LOOP =================
 -- pick the water source CLOSEST to the pump (the start-area spring by the
@@ -200,7 +201,7 @@ local main = Instance.new("Frame")
 main.Name = "Main"
 main.AnchorPoint = Vector2.new(0.5, 0.5)
 main.Position = UDim2.new(0.5, 0, 0.42, 0)
-main.Size = UDim2.new(0, 268, 0, 216)
+main.Size = UDim2.new(0, 268, 0, 262)
 main.BackgroundColor3 = C.bg
 main.BorderSizePixel = 0
 main.Parent = gui
@@ -243,7 +244,7 @@ Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
 -- toggle card
 local card = Instance.new("Frame")
 card.Position = UDim2.new(0, 14, 0, 48)
-card.Size = UDim2.new(1, -28, 0, 52)
+card.Size = UDim2.new(1, -28, 0, 46)
 card.BackgroundColor3 = C.card
 card.BorderSizePixel = 0
 card.Parent = main
@@ -279,10 +280,49 @@ knob.BorderSizePixel = 0
 knob.Parent = switch
 Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
+-- fly toggle card
+local flyCard = Instance.new("Frame")
+flyCard.Position = UDim2.new(0, 14, 0, 98)
+flyCard.Size = UDim2.new(1, -28, 0, 46)
+flyCard.BackgroundColor3 = C.card
+flyCard.BorderSizePixel = 0
+flyCard.Parent = main
+Instance.new("UICorner", flyCard).CornerRadius = UDim.new(0, 10)
+
+local flyLabel = Instance.new("TextLabel")
+flyLabel.BackgroundTransparency = 1
+flyLabel.Position = UDim2.new(0, 14, 0, 0)
+flyLabel.Size = UDim2.new(1, -80, 1, 0)
+flyLabel.Font = Enum.Font.GothamMedium
+flyLabel.Text = "Latanie (WASD/Space/Ctrl)"
+flyLabel.TextColor3 = C.txt
+flyLabel.TextSize = 14
+flyLabel.TextXAlignment = Enum.TextXAlignment.Left
+flyLabel.Parent = flyCard
+
+local flySwitch = Instance.new("TextButton")
+flySwitch.AnchorPoint = Vector2.new(1, 0.5)
+flySwitch.Position = UDim2.new(1, -14, 0.5, 0)
+flySwitch.Size = UDim2.new(0, 48, 0, 26)
+flySwitch.BackgroundColor3 = C.accOff
+flySwitch.Text = ""
+flySwitch.AutoButtonColor = false
+flySwitch.Parent = flyCard
+Instance.new("UICorner", flySwitch).CornerRadius = UDim.new(1, 0)
+
+local flyKnob = Instance.new("Frame")
+flyKnob.AnchorPoint = Vector2.new(0, 0.5)
+flyKnob.Position = UDim2.new(0, 3, 0.5, 0)
+flyKnob.Size = UDim2.new(0, 20, 0, 20)
+flyKnob.BackgroundColor3 = Color3.fromRGB(240, 240, 245)
+flyKnob.BorderSizePixel = 0
+flyKnob.Parent = flySwitch
+Instance.new("UICorner", flyKnob).CornerRadius = UDim.new(1, 0)
+
 -- walkspeed card
 local WS_MIN, WS_MAX = 16, 150
 local wsCard = Instance.new("Frame")
-wsCard.Position = UDim2.new(0, 14, 0, 108)
+wsCard.Position = UDim2.new(0, 14, 0, 148)
 wsCard.Size = UDim2.new(1, -28, 0, 46)
 wsCard.BackgroundColor3 = C.card
 wsCard.BorderSizePixel = 0
@@ -376,7 +416,7 @@ end)
 -- status
 local status = Instance.new("TextLabel")
 status.BackgroundTransparency = 1
-status.Position = UDim2.new(0, 16, 0, 162)
+status.Position = UDim2.new(0, 16, 0, 202)
 status.Size = UDim2.new(1, -32, 0, 20)
 status.Font = Enum.Font.Gotham
 status.Text = "gotowy"
@@ -387,7 +427,7 @@ status.Parent = main
 
 local counter = Instance.new("TextLabel")
 counter.BackgroundTransparency = 1
-counter.Position = UDim2.new(0, 16, 0, 184)
+counter.Position = UDim2.new(0, 16, 0, 224)
 counter.Size = UDim2.new(1, -32, 0, 20)
 counter.Font = Enum.Font.GothamMedium
 counter.Text = "Cykle: 0"
@@ -412,8 +452,85 @@ switch.MouseButton1Click:Connect(function()
 	setRunning(not running)
 end)
 
+--// ================= FLY =================
+local flyKeys = { W = false, A = false, S = false, D = false, UP = false, DOWN = false }
+local flyBV, flyBG
+
+local function killFly()
+	if flyBV then flyBV:Destroy() flyBV = nil end
+	if flyBG then flyBG:Destroy() flyBG = nil end
+	local c = getChar()
+	local hum = c and c:FindFirstChildWhichIsA("Humanoid")
+	if hum then pcall(function() hum.PlatformStand = false end) end
+end
+
+local function makeFly()
+	local hrp = getHRP()
+	if not hrp then return end
+	killFly()
+	flyBV = Instance.new("BodyVelocity")
+	flyBV.MaxForce = Vector3.new(1, 1, 1) * 9e9
+	flyBV.Velocity = Vector3.zero
+	flyBV.Parent = hrp
+	flyBG = Instance.new("BodyGyro")
+	flyBG.MaxTorque = Vector3.new(1, 1, 1) * 9e9
+	flyBG.P = 9e4
+	flyBG.CFrame = Workspace.CurrentCamera.CFrame
+	flyBG.Parent = hrp
+end
+
+local function setFlying(v)
+	flying = v
+	if v then makeFly() else killFly() end
+	local goalBg = v and C.on or C.accOff
+	local goalPos = v and UDim2.new(1, -23, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+	flyKnob.AnchorPoint = v and Vector2.new(1, 0.5) or Vector2.new(0, 0.5)
+	TweenService:Create(flySwitch, TweenInfo.new(0.18), { BackgroundColor3 = goalBg }):Play()
+	TweenService:Create(flyKnob, TweenInfo.new(0.18, Enum.EasingStyle.Quad), { Position = goalPos }):Play()
+end
+
+flySwitch.MouseButton1Click:Connect(function()
+	setFlying(not flying)
+end)
+
+-- key capture (ignore when typing)
+local KEYMAP = {
+	[Enum.KeyCode.W] = "W", [Enum.KeyCode.A] = "A",
+	[Enum.KeyCode.S] = "S", [Enum.KeyCode.D] = "D",
+	[Enum.KeyCode.Space] = "UP", [Enum.KeyCode.LeftControl] = "DOWN",
+}
+UserInputS.InputBegan:Connect(function(i, gpe)
+	if gpe then return end
+	local k = KEYMAP[i.KeyCode]
+	if k then flyKeys[k] = true end
+end)
+UserInputS.InputEnded:Connect(function(i)
+	local k = KEYMAP[i.KeyCode]
+	if k then flyKeys[k] = false end
+end)
+
+-- fly driver
+RunService.RenderStepped:Connect(function()
+	if not flying then return end
+	local hrp = getHRP()
+	if not hrp then return end
+	if not flyBV or flyBV.Parent ~= hrp then makeFly() end
+	local cam = Workspace.CurrentCamera
+	local dir = Vector3.zero
+	if flyKeys.W then dir = dir + cam.CFrame.LookVector end
+	if flyKeys.S then dir = dir - cam.CFrame.LookVector end
+	if flyKeys.A then dir = dir - cam.CFrame.RightVector end
+	if flyKeys.D then dir = dir + cam.CFrame.RightVector end
+	if flyKeys.UP then dir = dir + Vector3.new(0, 1, 0) end
+	if flyKeys.DOWN then dir = dir - Vector3.new(0, 1, 0) end
+	if dir.Magnitude > 0 then dir = dir.Unit end
+	if flyBV then flyBV.Velocity = dir * walkSpeed end   -- fly speed == walk speed
+	if flyBG then flyBG.CFrame = cam.CFrame end
+end)
+
 closeBtn.MouseButton1Click:Connect(function()
 	setRunning(false)
+	setFlying(false)
 	gui:Destroy()
 end)
 
@@ -448,6 +565,6 @@ end)
 --// ---- entrance pop ----
 main.Size = UDim2.new(0, 0, 0, 0)
 TweenService:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-	{ Size = UDim2.new(0, 268, 0, 216) }):Play()
+	{ Size = UDim2.new(0, 268, 0, 262) }):Play()
 
 print("[IceTycoon2Auto] loaded - toggle Auto Scoop + Fill w UI")
