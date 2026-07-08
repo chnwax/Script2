@@ -690,103 +690,25 @@ local SPEC = {
   {"Italy",2002,"Maldini (C)","Maldini","DEF",104,0},
   {"Brazil",2002,"Cafu (C)","Cafu","DEF",103,0},
 }
--- reconstruct WorldCupData + SpecialCards from the embedded snapshot above.
--- NO require()/getscriptclosure on game modules -> the game's require path is
--- never tainted, so in-game nav buttons (Shop/Collection/BestTeam/...) keep
--- working. (root cause of "przyciski nie dzialaja": touching a game ModuleScript
--- from the executor thread globally poisons the engine require path.)
+-- Card data lives in a self-managed file in the executor workspace (DATA_FILE).
+-- On load we read that file if present, else fall back to the embedded WCD/SPEC
+-- snapshot below (and write it out so the file exists next time). The UI button
+-- "Zaktualizuj karty" scrapes the live game modules and rewrites the file, then
+-- calls buildData() to refresh everything in place. buildData() turns the raw
+-- {WCD, SPEC, CROSS} shape into the structures the UI consumes.
+--
+-- Scrape safety: only pure-DATA modules (WorldCupData / SpecialCards) are ever
+-- require()'d, and only on explicit button press. Those two carry no nested
+-- requires, so requiring them (once the game already loaded them) does NOT taint
+-- the engine require path -- nav buttons keep working. We NEVER touch Screen /
+-- UIController modules or use getscriptclosure/getscriptfunction (that DOES taint
+-- and was the root cause of "przyciski nie dzialaja").
+local DATA_FILE = "SoccerSquadAuto_cards.lua"
 local WorldCupData = { Teams = {} }
-for year, byC in pairs(WCD) do
-    WorldCupData.Teams[year] = {}
-    for country, cards in pairs(byC) do
-        local players = {}
-        for _, s in ipairs(cards) do
-            local n, p, o = s:match("^(.*)%^(%a+)%^(%d+)$")
-            if n then players[#players + 1] = { name = n, pos = p, ovr = tonumber(o) } end
-        end
-        WorldCupData.Teams[year][country] = { players = players }
-    end
-end
-
-local SCmod = {}
-do
-    local Specials, flat = {}, {}
-    for _, e in ipairs(SPEC) do
-        local country, year, vn, bn, pos, ovr, price = e[1], e[2], e[3], e[4], e[5], e[6], e[7]
-        local def = {
-            variantName = vn, baseName = bn, pos = pos, ovr = ovr,
-            coinPrice = (price > 0) and price or nil,
-            gated = price > 0,
-        }
-        flat[#flat + 1] = { country = country, year = year, baseName = bn, def = def }
-        Specials[year] = Specials[year] or {}
-        Specials[year][country] = Specials[year][country] or {}
-        local slot = Specials[year][country]
-        if (not slot[bn]) or def.gated then slot[bn] = def end -- priced entry wins baseName slot
-    end
-    SCmod.Specials = Specials
-    function SCmod.Each() return flat end
-    function SCmod.GetForBase(year, country, baseName)
-        local a = Specials[year]; local b = a and a[country]
-        return b and b[baseName] or nil
-    end
-end
-
--- teamsCY[country][year] = { {name,pos,ovr}, ... } sorted by OVR desc.
--- Each roll lands on ONE exact team (top-level country + year on RollResult),
--- so we index by country AND year to show that precise squad.
-local teamsCY = {}
-do
-    for year, teams in pairs((WorldCupData and WorldCupData.Teams) or {}) do
-        for country, team in pairs(teams) do
-            teamsCY[country] = teamsCY[country] or {}
-            local list = {}
-            if type(team.players) == "table" then
-                for _, p in ipairs(team.players) do
-                    list[#list + 1] = { name = p.name, pos = p.pos, ovr = p.ovr }
-                end
-            end
-            table.sort(list, function(a, b)
-                if a.ovr == b.ovr then return a.name < b.name end
-                return a.ovr > b.ovr
-            end)
-            teamsCY[country][year] = list
-        end
-    end
-end
-
--- merge SPECIAL cards (variants like "GB Messi" 109, "Vinicius" 102) into the
--- teams. They live in SpecialCards.Specials[year][country][baseName] with a
--- boosted ovr + variantName; position comes from the base player.
-pcall(function()
-    local SC = SCmod
-    for _, e in ipairs(SC.Each()) do
-        local byYear = teamsCY[e.country]
-        local team = byYear and byYear[e.year]
-        if team then
-            local pos
-            for _, p in ipairs(team) do
-                if p.name == e.baseName then pos = p.pos; break end
-            end
-            local d = e.def or {}
-            team[#team + 1] = {
-                name    = d.variantName or e.baseName,
-                pos     = pos or (d.pos) or "?",
-                ovr     = d.ovr or 0,
-                special = true,
-            }
-        end
-    end
-    -- re-sort every team list now that specials were appended
-    for _, byYear in pairs(teamsCY) do
-        for _, l in pairs(byYear) do
-            table.sort(l, function(a, b)
-                if a.ovr == b.ovr then return a.name < b.name end
-                return a.ovr > b.ovr
-            end)
-        end
-    end
-end)
+local SCmod = { Specials = {}, Each = function() return {} end, GetForBase = function() return nil end }
+local CROSS_POS = {}                      -- name -> { extra spos } (cross-line)
+local teamsCY = {}                        -- [country][year] = { {name,pos,ovr}, ... }
+local countryNames, yearList = {}, {}
 
 --==================== position eligibility ====================
 -- Cards store only the broad line (GK/DEF/MID/FWD). Player rule: a card can fill
@@ -806,8 +728,9 @@ local POS_OF_SPOS = {
     LW = "FWD", ST = "FWD", RW = "FWD",
 }
 local SPOS_ALL = { "GK", "LB", "CB", "RB", "LM", "CM", "RM", "LW", "ST", "RW" }
--- name -> extra specific positions outside the card's main line (cross-line only)
-local CROSS_POS = {
+-- name -> extra specific positions outside the card's main line (cross-line only).
+-- This is the embedded fallback; the live scrape derives CROSS_POS from altPos.
+local CROSSDEF = {
     ["A. Sanchez"] = { "LM" }, ["Beckenbauer"] = { "CM" }, ["Breitner"] = { "CM" },
     ["Burruchaga"] = { "CM" }, ["Cafu"] = { "RM" }, ["Cruyff"] = { "CM" },
     ["Di Maria"] = { "RM" }, ["Donadoni"] = { "LM" }, ["Haan"] = { "CM" },
@@ -887,6 +810,8 @@ local STR = {
         hunttgt = "Cel OVR (maks 120)",
         showtop3 = "Pokaz top 3 (polowanie)",
         reconnect = "Reconnect", reconnectconfirm = "Potwierdz? (klik)", reconnecting = "Reconnect...",
+        updcards = "Zaktualizuj karty", updcardsdoing = "Zbieram dane z gry...",
+        updcardsdone = "Zapisano %d kart", updcardserr = "Blad: %s",
         actbtn = "Akcje (reroll / refresh)", acttitle = "Akcje",
         actmode = "Tryb", actreroll = "Reroll", actrefresh = "Refresh",
         acttarget = "Cel", acttteam = "Kraj + Rok", acttovr = "OVR+ dowolny",
@@ -919,6 +844,8 @@ local STR = {
         hunttgt = "Target OVR (max 120)",
         showtop3 = "Show top 3 (hunt)",
         reconnect = "Reconnect", reconnectconfirm = "Confirm? (click)", reconnecting = "Reconnect...",
+        updcards = "Update cards", updcardsdoing = "Scraping game data...",
+        updcardsdone = "Saved %d cards", updcardserr = "Error: %s",
         actbtn = "Actions (reroll / refresh)", acttitle = "Actions",
         actmode = "Mode", actreroll = "Reroll", actrefresh = "Refresh",
         acttarget = "Target", acttteam = "Country + Year", acttovr = "Any OVR+",
@@ -933,15 +860,229 @@ local function tr(k) return (STR[State.lang] or STR.PL)[k] or k end
 -- country display: Polish names in PL, raw English key in EN
 local function cName(c) return State.lang == "PL" and plName(c) or c end
 
--- sorted lists for the browse-all panel (sorted by Polish display name)
-local countryNames, yearList = {}, {}
-do
+-- buildData(WCD, SPEC, CROSS): (re)populate WorldCupData / SCmod / CROSS_POS /
+-- teamsCY / countryNames / yearList IN PLACE (same table identities, so every UI
+-- closure that captured them stays valid). Called once on load and again after a
+-- live scrape. WCD = [year][country] = {"Name^POS^OVR",...}; SPEC = array of
+-- {country,year,variantName,baseName,pos,ovr,price}; CROSS = [name]={spos,...}.
+local function buildData(wcd, spec, cross)
+    -- WorldCupData.Teams
+    for k in pairs(WorldCupData.Teams) do WorldCupData.Teams[k] = nil end
+    for year, byC in pairs(wcd or {}) do
+        WorldCupData.Teams[year] = {}
+        for country, cards in pairs(byC) do
+            local players = {}
+            for _, s in ipairs(cards) do
+                local n, p, o = s:match("^(.*)%^(%a+)%^(%d+)$")
+                if n then players[#players + 1] = { name = n, pos = p, ovr = tonumber(o) } end
+            end
+            WorldCupData.Teams[year][country] = { players = players }
+        end
+    end
+    -- SpecialCards shim
+    local Specials, flat = {}, {}
+    for _, e in ipairs(spec or {}) do
+        local country, year, vn, bn, pos, ovr, price = e[1], e[2], e[3], e[4], e[5], e[6], e[7]
+        price = tonumber(price) or 0
+        local def = {
+            variantName = vn, baseName = bn, pos = pos, ovr = ovr,
+            coinPrice = (price > 0) and price or nil,
+            gated = price > 0,
+        }
+        flat[#flat + 1] = { country = country, year = year, baseName = bn, def = def }
+        Specials[year] = Specials[year] or {}
+        Specials[year][country] = Specials[year][country] or {}
+        local slot = Specials[year][country]
+        if (not slot[bn]) or def.gated then slot[bn] = def end -- priced entry wins slot
+    end
+    SCmod.Specials = Specials
+    SCmod.Each = function() return flat end
+    SCmod.GetForBase = function(y, c, b)
+        local a = Specials[y]; local x = a and a[c]
+        return x and x[b] or nil
+    end
+    -- CROSS_POS (cross-line altPos)
+    for k in pairs(CROSS_POS) do CROSS_POS[k] = nil end
+    for name, arr in pairs(cross or {}) do
+        local t = {}
+        for _, s in ipairs(arr) do t[#t + 1] = s end
+        CROSS_POS[name] = t
+    end
+    -- teamsCY[country][year] = { {name,pos,ovr}, ... } sorted by OVR desc
+    for k in pairs(teamsCY) do teamsCY[k] = nil end
+    for year, teams in pairs(WorldCupData.Teams) do
+        for country, team in pairs(teams) do
+            teamsCY[country] = teamsCY[country] or {}
+            local list = {}
+            for _, p in ipairs(team.players or {}) do
+                list[#list + 1] = { name = p.name, pos = p.pos, ovr = p.ovr }
+            end
+            table.sort(list, function(a, b)
+                if a.ovr == b.ovr then return a.name < b.name end
+                return a.ovr > b.ovr
+            end)
+            teamsCY[country][year] = list
+        end
+    end
+    -- merge SPECIAL variants (boosted ovr + variantName; pos from base player)
+    pcall(function()
+        for _, e in ipairs(SCmod.Each()) do
+            local byYear = teamsCY[e.country]
+            local team = byYear and byYear[e.year]
+            if team then
+                local pos
+                for _, p in ipairs(team) do
+                    if p.name == e.baseName then pos = p.pos; break end
+                end
+                local d = e.def or {}
+                team[#team + 1] = {
+                    name = d.variantName or e.baseName,
+                    pos = pos or d.pos or "?",
+                    ovr = d.ovr or 0,
+                    special = true,
+                }
+            end
+        end
+        for _, byYear in pairs(teamsCY) do
+            for _, l in pairs(byYear) do
+                table.sort(l, function(a, b)
+                    if a.ovr == b.ovr then return a.name < b.name end
+                    return a.ovr > b.ovr
+                end)
+            end
+        end
+    end)
+    -- sorted lists for the browse-all panel (Polish display name order)
+    for k in pairs(countryNames) do countryNames[k] = nil end
+    for k in pairs(yearList) do yearList[k] = nil end
     local ys = {}
     for country in pairs(teamsCY) do countryNames[#countryNames + 1] = country end
     for year in pairs(WorldCupData.Teams) do ys[year] = true end
     for y in pairs(ys) do yearList[#yearList + 1] = y end
     table.sort(countryNames, function(a, b) return plName(a) < plName(b) end)
     table.sort(yearList)
+end
+
+-- serialize {WCD, SPEC, CROSS} to a loadable lua file (uses %q for safe quoting).
+local function serializeData(wcd, spec, cross)
+    local b = { "-- SoccerSquadAuto card data (auto-generated by 'Zaktualizuj karty').\n",
+                "-- Do not edit by hand; rerun the button to refresh.\nreturn {\nWCD={" }
+    local ys = {}
+    for y in pairs(wcd) do ys[#ys + 1] = y end
+    table.sort(ys)
+    for _, y in ipairs(ys) do
+        b[#b + 1] = "[" .. y .. "]={"
+        local cs = {}
+        for c in pairs(wcd[y]) do cs[#cs + 1] = c end
+        table.sort(cs)
+        for _, c in ipairs(cs) do
+            b[#b + 1] = string.format("[%q]={", c)
+            for _, s in ipairs(wcd[y][c]) do b[#b + 1] = string.format("%q,", s) end
+            b[#b + 1] = "},"
+        end
+        b[#b + 1] = "},"
+    end
+    b[#b + 1] = "},\nSPEC={"
+    for _, e in ipairs(spec) do
+        b[#b + 1] = string.format("{%q,%d,%q,%q,%q,%d,%d},",
+            tostring(e[1]), tonumber(e[2]) or 0, tostring(e[3]), tostring(e[4]),
+            tostring(e[5]), tonumber(e[6]) or 0, tonumber(e[7]) or 0)
+    end
+    b[#b + 1] = "},\nCROSS={"
+    local ns = {}
+    for n in pairs(cross) do ns[#ns + 1] = n end
+    table.sort(ns)
+    for _, n in ipairs(ns) do
+        local parts = {}
+        for _, s in ipairs(cross[n]) do parts[#parts + 1] = string.format("%q", s) end
+        b[#b + 1] = string.format("[%q]={%s},", n, table.concat(parts, ","))
+    end
+    b[#b + 1] = "},\n}\n"
+    return table.concat(b)
+end
+
+-- scrape ALL card data live from the game's pure-DATA modules. Returns
+-- { wcd, spec, cross, count } or nil,err. Only require()'s WorldCupData +
+-- SpecialCards (taint-safe once the game has loaded them) -- never Screen modules.
+local function scrapeFromGame()
+    local rs = game:GetService("ReplicatedStorage")
+    local wm = rs:FindFirstChild("WorldCupData")
+    local sm = rs:FindFirstChild("SpecialCards")
+    if not wm then return nil, "brak WorldCupData" end
+    local okW, WD = pcall(require, wm)
+    if not okW or type(WD) ~= "table" or type(WD.Teams) ~= "table" then
+        return nil, "WorldCupData: " .. tostring(WD)
+    end
+    local wcd, cross, count = {}, {}, 0
+    for year, teams in pairs(WD.Teams) do
+        wcd[year] = {}
+        for country, team in pairs(teams) do
+            local arr = {}
+            for _, p in ipairs(team.players or {}) do
+                if p.name and p.pos and p.ovr then
+                    arr[#arr + 1] = string.format("%s^%s^%d", p.name, p.pos, tonumber(p.ovr) or 0)
+                    count = count + 1
+                    if type(p.altPos) == "table" and #p.altPos > 0 then
+                        cross[p.name] = cross[p.name] or {}
+                        local seen = {}
+                        for _, s in ipairs(cross[p.name]) do seen[s] = true end
+                        for _, s in ipairs(p.altPos) do
+                            if not seen[s] then seen[s] = true; cross[p.name][#cross[p.name] + 1] = s end
+                        end
+                    end
+                end
+            end
+            wcd[year][country] = arr
+        end
+    end
+    -- specials (optional; base pos looked up from the scraped team)
+    local spec = {}
+    local okS, SD = pcall(require, sm)
+    if okS and type(SD) == "table" and type(SD.Specials) == "table" then
+        for year, byC in pairs(SD.Specials) do
+            for country, byName in pairs(byC) do
+                for baseName, d in pairs(byName) do
+                    if type(d) == "table" then
+                        local pos = "?"
+                        for _, s in ipairs(wcd[year] and wcd[year][country] or {}) do
+                            local n, pp = s:match("^(.*)%^(%a+)%^%d+$")
+                            if n == baseName then pos = pp; break end
+                        end
+                        spec[#spec + 1] = {
+                            country, year, d.variantName or baseName, baseName, pos,
+                            tonumber(d.ovr) or 0, tonumber(d.coinPrice) or 0,
+                        }
+                        count = count + 1
+                    end
+                end
+            end
+        end
+    end
+    return { wcd = wcd, spec = spec, cross = cross, count = count }
+end
+
+-- initial load: prefer the self-managed file, else embedded snapshot (which we
+-- also write out so the file exists for next time).
+do
+    local loaded
+    if isfile and pcall(isfile, DATA_FILE) and isfile(DATA_FILE) then
+        local ok, chunk = pcall(readfile, DATA_FILE)
+        if ok and type(chunk) == "string" then
+            local okc, fn = pcall(loadstring, chunk)
+            if okc and fn then
+                local okr, t = pcall(fn)
+                if okr and type(t) == "table" and type(t.WCD) == "table" then loaded = t end
+            end
+        end
+    end
+    if loaded then
+        buildData(loaded.WCD, loaded.SPEC or {}, loaded.CROSS or {})
+    else
+        buildData(WCD, SPEC, CROSSDEF)
+        pcall(function()
+            if writefile then writefile(DATA_FILE, serializeData(WCD, SPEC, CROSSDEF)) end
+        end)
+    end
 end
 
 -- the exact team the most recent roll landed on (RollResult carries top-level
@@ -1928,11 +2069,50 @@ spBtn.AutoButtonColor = true
 spBtn.Parent = pages.cards
 corner(spBtn, 8)
 
+-- "Zaktualizuj karty": scrape ALL card data live from the game and rewrite the
+-- data file, then rebuild in place so the panels reflect it immediately.
+local updBtn = Instance.new("TextButton")
+updBtn.Size = UDim2.new(1, 0, 0, 32)
+updBtn.Position = UDim2.fromOffset(0, 114)
+updBtn.BackgroundColor3 = Color3.fromRGB(58, 84, 66)
+updBtn.Text = tr("updcards")
+updBtn.TextColor3 = TXT
+updBtn.Font = Enum.Font.GothamSemibold
+updBtn.TextSize = 13
+updBtn.AutoButtonColor = true
+updBtn.Parent = pages.cards
+corner(updBtn, 8)
+langUpdaters[#langUpdaters + 1] = function()
+    if not updBtn:GetAttribute("busy") then updBtn.Text = tr("updcards") end
+end
+updBtn.MouseButton1Click:Connect(function()
+    if updBtn:GetAttribute("busy") then return end
+    updBtn:SetAttribute("busy", true)
+    updBtn.Text = tr("updcardsdoing")
+    task.spawn(function()
+        local ok, res = pcall(scrapeFromGame)
+        if ok and type(res) == "table" and res.wcd then
+            pcall(function()
+                if writefile then writefile(DATA_FILE, serializeData(res.wcd, res.spec, res.cross)) end
+            end)
+            pcall(buildData, res.wcd, res.spec, res.cross)
+            updBtn.Text = string.format(tr("updcardsdone"), res.count or 0)
+        else
+            local err = (not ok) and tostring(res) or "scrape nil"
+            updBtn.Text = string.format(tr("updcardserr"), tostring(err):sub(1, 24))
+        end
+        task.delay(4, function()
+            updBtn:SetAttribute("busy", false)
+            updBtn.Text = tr("updcards")
+        end)
+    end)
+end)
+
 -- Reconnect button: rejoins the same place. Two-click confirm (arm ~3s) so it is
 -- never triggered by an accidental single click.
 local rcBtn = Instance.new("TextButton")
 rcBtn.Size = UDim2.new(1, 0, 0, 32)
-rcBtn.Position = UDim2.fromOffset(0, 114)
+rcBtn.Position = UDim2.fromOffset(0, 152)
 rcBtn.BackgroundColor3 = Color3.fromRGB(70, 76, 72)
 rcBtn.Text = tr("reconnect")
 rcBtn.TextColor3 = TXT
