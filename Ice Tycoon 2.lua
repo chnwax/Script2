@@ -28,6 +28,12 @@ local function getHRP()
 	return c and c:FindFirstChild("HumanoidRootPart")
 end
 
+-- game blocks scoop/fill when CanPlay is false (cutscenes, jail, other zones)
+local function canPlay()
+	local cp = LocalPlayer:FindFirstChild("CanPlay")
+	return (not cp) or cp.Value == true
+end
+
 local function getWaters()
 	local list = {}
 	local map = Workspace:FindFirstChild("Map")
@@ -66,11 +72,40 @@ local function partPos(inst)
 	return ok and pv or nil
 end
 
-local function tpTo(pos, yOffset)
+-- pin HRP at a spot for a few frames so the new position REPLICATES to the
+-- server before we trigger the prompt (server validates real distance).
+local function hold(pos, yOffset)
 	local hrp = getHRP()
 	if not hrp or not pos then return false end
-	hrp.CFrame = CFrame.new(pos + Vector3.new(0, yOffset or 3, 0))
+	local target = CFrame.new(pos + Vector3.new(0, yOffset or 3, 0))
+	for _ = 1, 3 do
+		hrp.CFrame = target
+		RunService.Heartbeat:Wait()
+	end
 	return true
+end
+
+-- fire a prompt and confirm it registered by watching an IntValue delta.
+-- wantDrop=true  -> success when value DECREASES (water Amount on scoop)
+-- wantDrop=false -> success when value INCREASES (pump Amount on fill)
+local function fireUntil(prompt, valueObj, wantDrop, tries)
+	for _ = 1, (tries or 3) do
+		local before = valueObj.Value
+		pcall(fireprompt, prompt)
+		-- give the server a real round-trip window to reply
+		local ok = false
+		for _ = 1, 8 do
+			RunService.Heartbeat:Wait()
+			local after = valueObj.Value
+			if wantDrop then
+				if after < before then ok = true break end
+			else
+				if after > before then ok = true break end
+			end
+		end
+		if ok then return true end
+	end
+	return false
 end
 
 --// ================= STATE =================
@@ -94,7 +129,10 @@ task.spawn(function()
 	while true do
 		if running then
 			local pump = getPump()
-			if not (pump and pump.prompt and pump.amount) then
+			if not canPlay() then
+				statusText = "czekam (nie mozna grac)"
+				task.wait(0.3)
+			elseif not (pump and pump.prompt and pump.amount) then
 				statusText = "brak pompy"
 				task.wait(0.5)
 			else
@@ -104,26 +142,22 @@ task.spawn(function()
 				-- wait if pump full (dropper draining)
 				if pump.amount.Value >= maxV then
 					statusText = "pompa pelna - czekam"
-					task.wait(0.4)
+					task.wait(0.3)
 				else
 					local waters = getWaters()
 					local w = pickWater(waters)
 					if not w then
 						statusText = "brak wody - czekam"
-						task.wait(0.6)
+						task.wait(0.5)
 					else
-						-- scoop
+						-- scoop: pin at water, fire until water Amount drops
 						statusText = "nabieram wode..."
-						tpTo(partPos(w.model), 3)
-						task.wait(0.25)
-						pcall(fireprompt, w.prompt)
-						task.wait(0.2)
-						-- fill
+						hold(partPos(w.model), 3)
+						fireUntil(w.prompt, w.amount, true)
+						-- fill: pin at pump, fire until pump Amount rises
 						statusText = "wlewam do pompy..."
-						tpTo(pumpPos, 4)
-						task.wait(0.25)
-						pcall(fireprompt, pump.prompt)
-						task.wait(0.2)
+						hold(pumpPos, 3)
+						fireUntil(pump.prompt, pump.amount, false)
 						cycles = cycles + 1
 					end
 				end
