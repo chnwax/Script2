@@ -197,15 +197,18 @@ gui.IgnoreGuiInset = true
 pcall(function() gui.Parent = game:GetService("CoreGui") end)
 if not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
+local MAIN_W, FULL_H, MIN_H = 226, 210, 32
+
 local main = Instance.new("Frame")
 main.Name = "Main"
 main.AnchorPoint = Vector2.new(0.5, 0.5)
 main.Position = UDim2.new(0.5, 0, 0.42, 0)
-main.Size = UDim2.new(0, 268, 0, 262)
+main.Size = UDim2.new(0, MAIN_W, 0, FULL_H)
 main.BackgroundColor3 = C.bg
 main.BorderSizePixel = 0
+main.ClipsDescendants = true
 main.Parent = gui
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
 local stroke = Instance.new("UIStroke", main)
 stroke.Color = Color3.fromRGB(60, 62, 74)
 stroke.Thickness = 1
@@ -214,57 +217,69 @@ stroke.Transparency = 0.3
 -- top bar (drag handle)
 local top = Instance.new("Frame")
 top.Name = "Top"
-top.Size = UDim2.new(1, 0, 0, 40)
+top.Size = UDim2.new(1, 0, 0, 32)
 top.BackgroundTransparency = 1
 top.Parent = main
 
 local title = Instance.new("TextLabel")
 title.BackgroundTransparency = 1
-title.Position = UDim2.new(0, 16, 0, 0)
-title.Size = UDim2.new(1, -60, 1, 0)
+title.Position = UDim2.new(0, 12, 0, 0)
+title.Size = UDim2.new(1, -66, 1, 0)
 title.Font = Enum.Font.GothamBold
 title.Text = "Ice Tycoon 2"
 title.TextColor3 = C.txt
-title.TextSize = 16
+title.TextSize = 14
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = top
 
+local minBtn = Instance.new("TextButton")
+minBtn.Size = UDim2.new(0, 22, 0, 22)
+minBtn.Position = UDim2.new(1, -56, 0, 5)
+minBtn.BackgroundColor3 = C.card
+minBtn.Text = "-"
+minBtn.Font = Enum.Font.GothamBold
+minBtn.TextColor3 = C.sub
+minBtn.TextSize = 15
+minBtn.AutoButtonColor = true
+minBtn.Parent = top
+Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 7)
+
 local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 26, 0, 26)
-closeBtn.Position = UDim2.new(1, -34, 0, 7)
+closeBtn.Size = UDim2.new(0, 22, 0, 22)
+closeBtn.Position = UDim2.new(1, -30, 0, 5)
 closeBtn.BackgroundColor3 = C.card
 closeBtn.Text = "X"
 closeBtn.Font = Enum.Font.GothamBold
 closeBtn.TextColor3 = C.sub
-closeBtn.TextSize = 13
+closeBtn.TextSize = 12
 closeBtn.AutoButtonColor = true
 closeBtn.Parent = top
-Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 7)
 
 -- toggle card
 local card = Instance.new("Frame")
-card.Position = UDim2.new(0, 14, 0, 48)
-card.Size = UDim2.new(1, -28, 0, 46)
+card.Position = UDim2.new(0, 12, 0, 38)
+card.Size = UDim2.new(1, -24, 0, 40)
 card.BackgroundColor3 = C.card
 card.BorderSizePixel = 0
 card.Parent = main
-Instance.new("UICorner", card).CornerRadius = UDim.new(0, 10)
+Instance.new("UICorner", card).CornerRadius = UDim.new(0, 9)
 
 local tgLabel = Instance.new("TextLabel")
 tgLabel.BackgroundTransparency = 1
-tgLabel.Position = UDim2.new(0, 14, 0, 0)
-tgLabel.Size = UDim2.new(1, -80, 1, 0)
+tgLabel.Position = UDim2.new(0, 12, 0, 0)
+tgLabel.Size = UDim2.new(1, -70, 1, 0)
 tgLabel.Font = Enum.Font.GothamMedium
 tgLabel.Text = "Auto Scoop + Fill"
 tgLabel.TextColor3 = C.txt
-tgLabel.TextSize = 14
+tgLabel.TextSize = 13
 tgLabel.TextXAlignment = Enum.TextXAlignment.Left
 tgLabel.Parent = card
 
 local switch = Instance.new("TextButton")
 switch.AnchorPoint = Vector2.new(1, 0.5)
-switch.Position = UDim2.new(1, -14, 0.5, 0)
-switch.Size = UDim2.new(0, 48, 0, 26)
+switch.Position = UDim2.new(1, -12, 0.5, 0)
+switch.Size = UDim2.new(0, 42, 0, 22)
 switch.BackgroundColor3 = C.accOff
 switch.Text = ""
 switch.AutoButtonColor = false
@@ -274,7 +289,7 @@ Instance.new("UICorner", switch).CornerRadius = UDim.new(1, 0)
 local knob = Instance.new("Frame")
 knob.AnchorPoint = Vector2.new(0, 0.5)
 knob.Position = UDim2.new(0, 3, 0.5, 0)
-knob.Size = UDim2.new(0, 20, 0, 20)
+knob.Size = UDim2.new(0, 16, 0, 16)
 knob.BackgroundColor3 = Color3.fromRGB(240, 240, 245)
 knob.BorderSizePixel = 0
 knob.Parent = switch
@@ -282,28 +297,28 @@ Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
 -- fly toggle card
 local flyCard = Instance.new("Frame")
-flyCard.Position = UDim2.new(0, 14, 0, 98)
-flyCard.Size = UDim2.new(1, -28, 0, 46)
+flyCard.Position = UDim2.new(0, 12, 0, 82)
+flyCard.Size = UDim2.new(1, -24, 0, 40)
 flyCard.BackgroundColor3 = C.card
 flyCard.BorderSizePixel = 0
 flyCard.Parent = main
-Instance.new("UICorner", flyCard).CornerRadius = UDim.new(0, 10)
+Instance.new("UICorner", flyCard).CornerRadius = UDim.new(0, 9)
 
 local flyLabel = Instance.new("TextLabel")
 flyLabel.BackgroundTransparency = 1
-flyLabel.Position = UDim2.new(0, 14, 0, 0)
-flyLabel.Size = UDim2.new(1, -80, 1, 0)
+flyLabel.Position = UDim2.new(0, 12, 0, 0)
+flyLabel.Size = UDim2.new(1, -70, 1, 0)
 flyLabel.Font = Enum.Font.GothamMedium
-flyLabel.Text = "Latanie (WASD/Space/Ctrl)"
+flyLabel.Text = "Latanie (WASD/Spc/Ctrl)"
 flyLabel.TextColor3 = C.txt
-flyLabel.TextSize = 14
+flyLabel.TextSize = 13
 flyLabel.TextXAlignment = Enum.TextXAlignment.Left
 flyLabel.Parent = flyCard
 
 local flySwitch = Instance.new("TextButton")
 flySwitch.AnchorPoint = Vector2.new(1, 0.5)
-flySwitch.Position = UDim2.new(1, -14, 0.5, 0)
-flySwitch.Size = UDim2.new(0, 48, 0, 26)
+flySwitch.Position = UDim2.new(1, -12, 0.5, 0)
+flySwitch.Size = UDim2.new(0, 42, 0, 22)
 flySwitch.BackgroundColor3 = C.accOff
 flySwitch.Text = ""
 flySwitch.AutoButtonColor = false
@@ -313,7 +328,7 @@ Instance.new("UICorner", flySwitch).CornerRadius = UDim.new(1, 0)
 local flyKnob = Instance.new("Frame")
 flyKnob.AnchorPoint = Vector2.new(0, 0.5)
 flyKnob.Position = UDim2.new(0, 3, 0.5, 0)
-flyKnob.Size = UDim2.new(0, 20, 0, 20)
+flyKnob.Size = UDim2.new(0, 16, 0, 16)
 flyKnob.BackgroundColor3 = Color3.fromRGB(240, 240, 245)
 flyKnob.BorderSizePixel = 0
 flyKnob.Parent = flySwitch
@@ -322,27 +337,27 @@ Instance.new("UICorner", flyKnob).CornerRadius = UDim.new(1, 0)
 -- walkspeed card
 local WS_MIN, WS_MAX = 16, 150
 local wsCard = Instance.new("Frame")
-wsCard.Position = UDim2.new(0, 14, 0, 148)
-wsCard.Size = UDim2.new(1, -28, 0, 46)
+wsCard.Position = UDim2.new(0, 12, 0, 126)
+wsCard.Size = UDim2.new(1, -24, 0, 42)
 wsCard.BackgroundColor3 = C.card
 wsCard.BorderSizePixel = 0
 wsCard.Parent = main
-Instance.new("UICorner", wsCard).CornerRadius = UDim.new(0, 10)
+Instance.new("UICorner", wsCard).CornerRadius = UDim.new(0, 9)
 
 local wsLabel = Instance.new("TextLabel")
 wsLabel.BackgroundTransparency = 1
-wsLabel.Position = UDim2.new(0, 14, 0, 4)
-wsLabel.Size = UDim2.new(1, -28, 0, 16)
+wsLabel.Position = UDim2.new(0, 12, 0, 4)
+wsLabel.Size = UDim2.new(1, -24, 0, 15)
 wsLabel.Font = Enum.Font.GothamMedium
 wsLabel.Text = "Predkosc chodzenia: 16"
 wsLabel.TextColor3 = C.txt
-wsLabel.TextSize = 13
+wsLabel.TextSize = 12
 wsLabel.TextXAlignment = Enum.TextXAlignment.Left
 wsLabel.Parent = wsCard
 
 local track = Instance.new("Frame")
-track.Position = UDim2.new(0, 14, 0, 28)
-track.Size = UDim2.new(1, -28, 0, 6)
+track.Position = UDim2.new(0, 12, 0, 26)
+track.Size = UDim2.new(1, -24, 0, 6)
 track.BackgroundColor3 = C.accOff
 track.BorderSizePixel = 0
 track.Parent = wsCard
@@ -401,38 +416,37 @@ UserInputS.InputChanged:Connect(function(i)
 	end
 end)
 
--- keep the chosen walkspeed applied (game/respawn resets it)
-task.spawn(function()
-	while true do
-		local c = getChar()
-		local hum = c and c:FindFirstChildWhichIsA("Humanoid")
-		if hum and math.abs(hum.WalkSpeed - walkSpeed) > 0.5 then
-			pcall(function() hum.WalkSpeed = walkSpeed end)
-		end
-		task.wait(0.25)
+-- keep the chosen walkspeed applied EVERY frame. the game's ClientStuff
+-- rewrites WalkSpeed ~10x/sec; a slow reapply loop fought it and produced
+-- the start-stop "serie" stutter. per-frame keeps it rock solid.
+RunService.Heartbeat:Connect(function()
+	local c = getChar()
+	local hum = c and c:FindFirstChildWhichIsA("Humanoid")
+	if hum and hum.WalkSpeed ~= walkSpeed then
+		hum.WalkSpeed = walkSpeed
 	end
 end)
 
 -- status
 local status = Instance.new("TextLabel")
 status.BackgroundTransparency = 1
-status.Position = UDim2.new(0, 16, 0, 202)
-status.Size = UDim2.new(1, -32, 0, 20)
+status.Position = UDim2.new(0, 12, 0, 174)
+status.Size = UDim2.new(1, -24, 0, 16)
 status.Font = Enum.Font.Gotham
 status.Text = "gotowy"
 status.TextColor3 = C.sub
-status.TextSize = 13
+status.TextSize = 12
 status.TextXAlignment = Enum.TextXAlignment.Left
 status.Parent = main
 
 local counter = Instance.new("TextLabel")
 counter.BackgroundTransparency = 1
-counter.Position = UDim2.new(0, 16, 0, 224)
-counter.Size = UDim2.new(1, -32, 0, 20)
+counter.Position = UDim2.new(0, 12, 0, 190)
+counter.Size = UDim2.new(1, -24, 0, 16)
 counter.Font = Enum.Font.GothamMedium
 counter.Text = "Cykle: 0"
 counter.TextColor3 = C.acc
-counter.TextSize = 13
+counter.TextSize = 12
 counter.TextXAlignment = Enum.TextXAlignment.Left
 counter.Parent = main
 
@@ -447,7 +461,7 @@ local function setRunning(v)
 	end
 	running = v
 	local goalBg = v and C.on or C.accOff
-	local goalPos = v and UDim2.new(1, -23, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+	local goalPos = v and UDim2.new(1, -3, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
 	local anchor = v and Vector2.new(1, 0.5) or Vector2.new(0, 0.5)
 	knob.AnchorPoint = anchor
 	TweenService:Create(switch, TweenInfo.new(0.18), { BackgroundColor3 = goalBg }):Play()
@@ -502,7 +516,7 @@ local function setFlying(v)
 	flying = v
 	if v then makeFly() else killFly() end
 	local goalBg = v and C.on or C.accOff
-	local goalPos = v and UDim2.new(1, -23, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+	local goalPos = v and UDim2.new(1, -3, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
 	flyKnob.AnchorPoint = v and Vector2.new(1, 0.5) or Vector2.new(0, 0.5)
 	TweenService:Create(flySwitch, TweenInfo.new(0.18), { BackgroundColor3 = goalBg }):Play()
 	TweenService:Create(flyKnob, TweenInfo.new(0.18, Enum.EasingStyle.Quad), { Position = goalPos }):Play()
@@ -553,6 +567,24 @@ closeBtn.MouseButton1Click:Connect(function()
 	gui:Destroy()
 end)
 
+--// ---- minimize ----
+local minimized = false
+local function setMinimized(v)
+	minimized = v
+	card.Visible = not v
+	flyCard.Visible = not v
+	wsCard.Visible = not v
+	status.Visible = not v
+	counter.Visible = not v
+	minBtn.Text = v and "+" or "-"
+	local h = v and MIN_H or FULL_H
+	TweenService:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad),
+		{ Size = UDim2.new(0, MAIN_W, 0, h) }):Play()
+end
+minBtn.MouseButton1Click:Connect(function()
+	setMinimized(not minimized)
+end)
+
 --// ---- status refresh ----
 RunService.RenderStepped:Connect(function()
 	if status.Text ~= statusText then status.Text = statusText end
@@ -584,6 +616,6 @@ end)
 --// ---- entrance pop ----
 main.Size = UDim2.new(0, 0, 0, 0)
 TweenService:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-	{ Size = UDim2.new(0, 268, 0, 262) }):Play()
+	{ Size = UDim2.new(0, MAIN_W, 0, FULL_H) }):Play()
 
 print("[IceTycoon2Auto] loaded - toggle Auto Scoop + Fill w UI")
