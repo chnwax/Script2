@@ -267,7 +267,14 @@ local function startBuyLoop()
 		-- Scratching is server-serialized (~10/s), so uncapped buying floods the inventory.
 		-- A poller tracks inventory size; while scratch is on we stop buying once it reaches
 		-- buyBuffer, keeping scratch fed without piling up thousands of unscratched cards.
+		-- Seed the count synchronously first so workers respect the buffer immediately,
+		-- instead of buying blind during the poller's first 0.25s window.
 		local invCount = 0
+		do
+			local inv
+			pcall(function() inv = ScratchRemote:InvokeServer("GetInventory") end)
+			if inv and inv.Inventory then invCount = #inv.Inventory end
+		end
 		task.spawn(function()
 			while S.buy and alive() do
 				local inv
