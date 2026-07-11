@@ -53,7 +53,7 @@ local S = {
 	buyIdx = 1, qtyIdx = 2, -- default Siodemeczki x5
 	sellAt = 500, -- auto-sell fires when held bottles >= this (user-editable)
 }
-local moveThread, remoteThread, rewardThread
+local moveThread, buyThread, scratchThread, rewardThread
 
 --============================ HELPERS ============================--
 local function char() return lp.Character end
@@ -254,48 +254,49 @@ local function startMovementLoop()
 	end)
 end
 
---============================ REMOTE WORKER (buy/scratch) ============================--
-local function startRemoteLoop()
-	if remoteThread then return end
-	remoteThread = task.spawn(function()
-		while (S.buy or S.scratch) and alive() do
-			if S.buy then
-				local sel = BUYABLE[S.buyIdx]
-				local want = QTY[S.qtyIdx]
-				-- The server IGNORES the quantity arg: one BuyCard call = one card, no
-				-- matter what number is passed. So to buy "want" cards we loop the call.
-				-- Each call is a blocking round-trip, so no waits are needed -> RTT-paced,
-				-- hundreds of cards per second.
-				local bought = 0
-				if sel then
-					while bought < want and kasa() >= sel.c and S.buy and alive() do
-						pcall(function() ScratchRemote:InvokeServer("BuyCard", sel.k, 1) end)
-						bought = bought + 1
-					end
-				end
-				if bought == 0 then task.wait(0.3) end -- can't afford: idle briefly
-			end
-			if S.scratch then
-				local inv
-				pcall(function() inv = ScratchRemote:InvokeServer("GetInventory") end)
-				local did = 0
-				if inv and inv.Inventory then
-					-- No waits: UseCard + CompleteScratch are blocking round-trips, so the
-					-- server RTT is the only pacing. Zero waits = as fast as the net allows.
-					for _, cardData in ipairs(inv.Inventory) do
-						if not S.scratch then break end
-						local id = cardData.Id
-						if id then
-							pcall(function() ScratchRemote:InvokeServer("UseCard", id) end)
-							pcall(function() ScratchRemote:InvokeServer("CompleteScratch") end)
-							did = did + 1
-						end
-					end
-				end
-				if did == 0 then task.wait(0.15) end -- idle: nothing to scratch
+--============================ REMOTE WORKERS (buy + scratch, parallel) ============================--
+-- Buy and scratch run in their OWN threads so they happen at the same time:
+-- one keeps buying cards while the other keeps draining the inventory by scratching.
+local function startBuyLoop()
+	if buyThread then return end
+	buyThread = task.spawn(function()
+		while S.buy and alive() do
+			local sel = BUYABLE[S.buyIdx]
+			-- The server IGNORES the quantity arg: one BuyCard call = one card. Each call
+			-- is a blocking round-trip, so no waits are needed -> RTT-paced, hundreds/sec.
+			if sel and kasa() >= sel.c then
+				pcall(function() ScratchRemote:InvokeServer("BuyCard", sel.k, 1) end)
+			else
+				task.wait(0.3) -- can't afford / no selection: idle briefly
 			end
 		end
-		remoteThread = nil
+		buyThread = nil
+	end)
+end
+
+local function startScratchLoop()
+	if scratchThread then return end
+	scratchThread = task.spawn(function()
+		while S.scratch and alive() do
+			local inv
+			pcall(function() inv = ScratchRemote:InvokeServer("GetInventory") end)
+			local did = 0
+			if inv and inv.Inventory then
+				-- No waits: UseCard + CompleteScratch are blocking round-trips (server holds
+				-- one active scratch per player, so this stays sequential within the thread).
+				for _, cardData in ipairs(inv.Inventory) do
+					if not S.scratch then break end
+					local id = cardData.Id
+					if id then
+						pcall(function() ScratchRemote:InvokeServer("UseCard", id) end)
+						pcall(function() ScratchRemote:InvokeServer("CompleteScratch") end)
+						did = did + 1
+					end
+				end
+			end
+			if did == 0 then task.wait(0.15) end -- idle: nothing to scratch yet
+		end
+		scratchThread = nil
 	end)
 end
 
@@ -424,7 +425,8 @@ local function makeToggle(label, key)
 	btn.MouseButton1Click:Connect(function()
 		S[key] = not S[key]
 		refresh()
-		if key == "buy" or key == "scratch" then startRemoteLoop()
+		if key == "buy" then startBuyLoop()
+		elseif key == "scratch" then startScratchLoop()
 		elseif key == "reward" then startRewardLoop()
 		else startMovementLoop() end
 	end)
