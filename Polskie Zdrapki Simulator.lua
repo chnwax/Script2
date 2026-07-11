@@ -193,7 +193,7 @@ local function turboCollect()
 			local ok, pos = pcall(function() return b:GetPivot().Position end)
 			if ok then
 				h.CFrame = CFrame.new(pos)
-				task.wait() -- one frame, let the magnet register proximity
+				task.wait(0.1) -- pause by each bottle so the magnet has time to vacuum it
 			end
 		end
 	end
