@@ -49,6 +49,7 @@ local QTY = {1,5,10,20,50,100,150,200,300,500}
 local S = {
 	collect = false, sell = false, buy = false, scratch = false, renta = false, reward = false,
 	turbo = false, -- collect as fast as possible: no settle wait, more re-sweep passes
+	turboDelay = 0.1, -- seconds paused at each bottle in turbo (user-editable)
 	buyIdx = 1, qtyIdx = 2, -- default Siodemeczki x5
 	sellAt = 500, -- auto-sell fires when held bottles >= this (user-editable)
 }
@@ -189,11 +190,13 @@ local function turboCollect()
 	local h = hrp(); if not h then return end
 	for _, b in ipairs(folder:GetChildren()) do
 		if not S.turbo then return end
+		-- yield mid-sweep so a full inventory goes to sell instead of collecting more
+		if S.sell and bottleCount() >= S.sellAt then return end
 		if b.Parent then
 			local ok, pos = pcall(function() return b:GetPivot().Position end)
 			if ok then
 				h.CFrame = CFrame.new(pos)
-				task.wait(0.1) -- pause by each bottle so the magnet has time to vacuum it
+				task.wait(S.turboDelay) -- pause by each bottle so the magnet has time to vacuum it
 			end
 		end
 	end
@@ -205,6 +208,7 @@ local function collectBottles()
 	if not folder then return end
 	for pass = 1, 4 do
 		if not S.collect then return end
+		if S.sell and bottleCount() >= S.sellAt then return end -- yield to sell when full
 		local rares, normals = {}, {}
 		for _, b in ipairs(folder:GetChildren()) do
 			if isRare(b) then rares[#rares+1] = b else normals[#normals+1] = b end
@@ -213,6 +217,7 @@ local function collectBottles()
 		for _, grp in ipairs({ rares, normals }) do
 			for _, b in ipairs(grp) do
 				if not S.collect then return end
+				if S.sell and bottleCount() >= S.sellAt then return end -- yield to sell when full
 				if b.Parent then
 					local pp = b:FindFirstChildWhichIsA("ProximityPrompt", true)
 					if pp and pp.Enabled then fired = true; grab(b) end
@@ -354,7 +359,7 @@ local BG = Color3.fromRGB(24, 24, 32)
 local PANEL = Color3.fromRGB(34, 34, 46)
 local OFF = Color3.fromRGB(60, 60, 72)
 
-local W, FULL_H, MIN_H = 250, 452, 34
+local W, FULL_H, MIN_H = 250, 486, 34
 local main = Instance.new("Frame")
 main.Size = UDim2.fromOffset(W, FULL_H)
 main.Position = UDim2.new(0.5, -W/2, 0.35, 0)
@@ -427,42 +432,48 @@ local function makeToggle(label, key)
 	return btn
 end
 
+-- labelled numeric input row; commit(text) validates and returns the text to show
+local function makeNumRow(labelText, initial, commit)
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 28)
+	row.BackgroundTransparency = 1
+	row.LayoutOrder = nextOrder()
+	row.Parent = body
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(1, -70, 1, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.Font = Enum.Font.Gotham
+	lbl.TextSize = 12
+	lbl.TextColor3 = Color3.fromRGB(190,190,205)
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.Text = labelText
+	lbl.Parent = row
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.fromOffset(62, 26)
+	box.Position = UDim2.new(1, -62, 0, 1)
+	box.BackgroundColor3 = PANEL
+	box.Font = Enum.Font.GothamBold
+	box.TextSize = 13
+	box.TextColor3 = Color3.fromRGB(235,235,245)
+	box.ClearTextOnFocus = false
+	box.Text = initial
+	box.Parent = row
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+	box.FocusLost:Connect(function() box.Text = commit(box.Text) end)
+end
+
 makeToggle("Auto Zbieraj Butelki", "collect")
 makeToggle("Turbo (magnes) zbieranie", "turbo")
+makeNumRow("Turbo delay (s)", tostring(S.turboDelay), function(t)
+	local n = tonumber(t)
+	if n and n >= 0 then S.turboDelay = n end
+	return tostring(S.turboDelay)
+end)
 makeToggle("Auto Sprzedaj", "sell")
-
--- editable threshold: sell fires when held bottles >= this value
-local sellRow = Instance.new("Frame")
-sellRow.Size = UDim2.new(1, 0, 0, 28)
-sellRow.BackgroundTransparency = 1
-sellRow.LayoutOrder = nextOrder()
-sellRow.Parent = body
-
-local sellLbl = Instance.new("TextLabel")
-sellLbl.Size = UDim2.new(1, -70, 1, 0)
-sellLbl.BackgroundTransparency = 1
-sellLbl.Font = Enum.Font.Gotham
-sellLbl.TextSize = 12
-sellLbl.TextColor3 = Color3.fromRGB(190,190,205)
-sellLbl.TextXAlignment = Enum.TextXAlignment.Left
-sellLbl.Text = "Sprzedaj gdy butelek >="
-sellLbl.Parent = sellRow
-
-local sellBox = Instance.new("TextBox")
-sellBox.Size = UDim2.fromOffset(62, 26)
-sellBox.Position = UDim2.new(1, -62, 0, 1)
-sellBox.BackgroundColor3 = PANEL
-sellBox.Font = Enum.Font.GothamBold
-sellBox.TextSize = 13
-sellBox.TextColor3 = Color3.fromRGB(235,235,245)
-sellBox.ClearTextOnFocus = false
-sellBox.Text = tostring(S.sellAt)
-sellBox.Parent = sellRow
-Instance.new("UICorner", sellBox).CornerRadius = UDim.new(0, 6)
-sellBox.FocusLost:Connect(function()
-	local n = tonumber(sellBox.Text)
+makeNumRow("Sprzedaj gdy butelek >=", tostring(S.sellAt), function(t)
+	local n = tonumber(t)
 	if n and n > 0 then S.sellAt = math.floor(n) end
-	sellBox.Text = tostring(S.sellAt)
+	return tostring(S.sellAt)
 end)
 
 makeToggle("Auto Zdrapuj", "scratch")
