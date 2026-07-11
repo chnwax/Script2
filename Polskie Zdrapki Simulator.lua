@@ -154,7 +154,7 @@ local function grab(bottle)
 	pcall(function() pp.HoldDuration = 0 end)
 	-- bug 2: server validates distance but does NOT rubberband, so teleport-grab is safe
 	h.CFrame = CFrame.new(pos + Vector3.new(2, 0, 0))
-	task.wait(0.05)
+	task.wait(0.15) -- server needs the char to settle at the new pos before it accepts the fire
 	pcall(fireproximityprompt, pp)
 end
 
