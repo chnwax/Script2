@@ -159,6 +159,34 @@ local function startRemoteLoop()
 	end)
 end
 
+-- one-shot: scratch every card in inventory (bound to F)
+local scratchingAll = false
+local function scratchAllOnce()
+	if scratchingAll then return end
+	scratchingAll = true
+	task.spawn(function()
+		local inv
+		pcall(function() inv = ScratchRemote:InvokeServer("GetInventory") end)
+		if inv and inv.Inventory then
+			for _, cardData in ipairs(inv.Inventory) do
+				local id = cardData.Id
+				if id then
+					pcall(function() ScratchRemote:InvokeServer("UseCard", id) end)
+					task.wait(0.1)
+					pcall(function() ScratchRemote:InvokeServer("CompleteScratch") end)
+					task.wait(0.1)
+				end
+			end
+		end
+		scratchingAll = false
+	end)
+end
+
+UserInput.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if input.KeyCode == Enum.KeyCode.F then scratchAllOnce() end
+end)
+
 --============================ UI ============================--
 local gui = Instance.new("ScreenGui")
 gui.Name = "ZdrapkiAuto"
@@ -307,13 +335,13 @@ status.BackgroundTransparency = 1
 status.Font = Enum.Font.Gotham
 status.TextSize = 11
 status.TextColor3 = Color3.fromRGB(160,160,180)
-status.Text = "Kasa: 0"
+status.Text = "Kasa: 0   [F] = zdrap wszystkie"
 status.LayoutOrder = nextOrder()
 status.Parent = body
 
 task.spawn(function()
 	while gui.Parent do
-		status.Text = ("Kasa: %s"):format(tostring(kasa()))
+		status.Text = ("Kasa: %s   [F] zdrap all"):format(tostring(kasa()))
 		task.wait(0.5)
 	end
 end)
