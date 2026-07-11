@@ -9,6 +9,20 @@ local UserInput = game:GetService("UserInputService")
 
 local lp = Players.LocalPlayer
 
+-- Generation token: bumping it makes every older instance's loops and keybinds
+-- exit, so re-running the script never leaves duplicate workers behind.
+_G.__ZdrapkiGen = (_G.__ZdrapkiGen or 0) + 1
+local MY_GEN = _G.__ZdrapkiGen
+local function alive() return _G.__ZdrapkiGen == MY_GEN end
+
+-- Remove any UI left by a previous run.
+for _, where in ipairs({ game:GetService("CoreGui"), lp:FindFirstChild("PlayerGui") }) do
+	if where then
+		local old = where:FindFirstChild("ZdrapkiAuto")
+		while old do old:Destroy() old = where:FindFirstChild("ZdrapkiAuto") end
+	end
+end
+
 --============================ REMOTES / CONFIG ============================--
 local ScratchRemote = RS:WaitForChild("ScratchCardRemote")
 
@@ -49,21 +63,43 @@ local function heldBottleTool()
 end
 
 --============================ MOVEMENT WORKER (collect/sell/renta) ============================--
+local SELL_GROUP = 345048010
 local function sellAllBottles()
 	local komat = workspace:FindFirstChild("Butelkomat")
-	local promptPart = komat and komat:FindFirstChild("prompt")
-	local sp = promptPart and promptPart:FindFirstChildOfClass("ProximityPrompt")
+	if not komat then return end
+	if not heldBottleTool() then return end -- nothing to sell
+	local h = hrp(); if not h then return end
+
+	local inGroup = false
+	pcall(function() inGroup = lp:IsInGroup(SELL_GROUP) end)
+
+	-- Preferred: F prompt "Sprzedaj wszystkie butelki" -> one fire sells the WHOLE
+	-- inventory at once, no equipping. Requires membership of the sell group.
+	if inGroup then
+		local part = komat:FindFirstChild("prompt2")
+		local pp = part and part:FindFirstChildOfClass("ProximityPrompt")
+		if pp then
+			h.CFrame = CFrame.new(part.Position + Vector3.new(0,0,3))
+			task.wait(0.12)
+			pcall(fireproximityprompt, pp)
+			task.wait(0.2)
+			return
+		end
+	end
+
+	-- Fallback (not in group): E prompt sells only the equipped bottle, so loop.
+	local part = komat:FindFirstChild("prompt")
+	local sp = part and part:FindFirstChildOfClass("ProximityPrompt")
 	if not sp then return end
-	local h = hrp(); local hu = hum()
-	if not (h and hu) then return end
 	local guard = 0
 	while S.sell and guard < 600 do
 		guard = guard + 1
 		local tool = heldBottleTool()
 		if not tool then break end
-		h = hrp(); hu = hum()
+		local hu = hum()
+		h = hrp()
 		if not (h and hu) then break end
-		h.CFrame = CFrame.new(promptPart.Position + Vector3.new(0,0,3))
+		h.CFrame = CFrame.new(part.Position + Vector3.new(0,0,3))
 		pcall(function() hu:EquipTool(tool) end)
 		task.wait(0.07)
 		pcall(fireproximityprompt, sp)
@@ -124,7 +160,7 @@ local function startMovementLoop()
 	if moveThread then return end
 	moveThread = task.spawn(function()
 		local home
-		while S.collect or S.sell or S.renta do
+		while (S.collect or S.sell or S.renta) and alive() do
 			local h = hrp()
 			if not h then task.wait(0.25) else
 				if not home then home = h.CFrame end
@@ -145,7 +181,7 @@ end
 local function startRemoteLoop()
 	if remoteThread then return end
 	remoteThread = task.spawn(function()
-		while S.buy or S.scratch do
+		while (S.buy or S.scratch) and alive() do
 			if S.buy then
 				local sel = BUYABLE[S.buyIdx]; local q = QTY[S.qtyIdx]
 				if sel and kasa() >= sel.c * q then
@@ -158,21 +194,23 @@ local function startRemoteLoop()
 			if S.scratch then
 				local inv
 				pcall(function() inv = ScratchRemote:InvokeServer("GetInventory") end)
+				local did = 0
 				if inv and inv.Inventory then
+					-- No waits: UseCard + CompleteScratch are blocking round-trips, so the
+					-- server RTT is the only pacing. Zero waits = as fast as the net allows.
 					for _, cardData in ipairs(inv.Inventory) do
 						if not S.scratch then break end
 						local id = cardData.Id
 						if id then
 							pcall(function() ScratchRemote:InvokeServer("UseCard", id) end)
-							task.wait(0.12)
 							pcall(function() ScratchRemote:InvokeServer("CompleteScratch") end)
-							task.wait(0.12)
+							did = did + 1
 						end
 					end
 				end
-				task.wait(0.15)
+				if did == 0 then task.wait(0.15) end -- idle: nothing to scratch
 			end
-			task.wait(0.1)
+			if not S.scratch then task.wait(0.1) end
 		end
 		remoteThread = nil
 	end)
@@ -191,9 +229,7 @@ local function scratchAllOnce()
 				local id = cardData.Id
 				if id then
 					pcall(function() ScratchRemote:InvokeServer("UseCard", id) end)
-					task.wait(0.1)
 					pcall(function() ScratchRemote:InvokeServer("CompleteScratch") end)
-					task.wait(0.1)
 				end
 			end
 		end
@@ -202,7 +238,7 @@ local function scratchAllOnce()
 end
 
 UserInput.InputBegan:Connect(function(input, gpe)
-	if gpe then return end
+	if gpe or not alive() then return end
 	if input.KeyCode == Enum.KeyCode.F then scratchAllOnce() end
 end)
 
