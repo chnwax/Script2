@@ -57,6 +57,21 @@ local moveThread, remoteThread, rewardThread
 local function char() return lp.Character end
 local function hrp() local c=char(); return c and c:FindFirstChild("HumanoidRootPart") end
 local function hum() local c=char(); return c and c:FindFirstChildOfClass("Humanoid") end
+-- If a teleport lands the char on a seat it sits down and can't collect. Force it
+-- back up: drop the seat weld, clear Sit, and jump.
+local function unseat()
+	local hu = hum()
+	if not hu then return end
+	if hu.Sit or hu.SeatPart then
+		pcall(function()
+			local sp = hu.SeatPart
+			if sp then local w = sp:FindFirstChild("SeatWeld"); if w then w:Destroy() end end
+			hu.Sit = false
+			hu:ChangeState(Enum.HumanoidStateType.Jumping)
+			hu.Jump = true
+		end)
+	end
+end
 local function kasa()
 	local ls=lp:FindFirstChild("leaderstats"); local k=ls and ls:FindFirstChild("Kasa")
 	return k and k.Value or 0
@@ -155,6 +170,7 @@ local function grab(bottle)
 	pcall(function() pp.HoldDuration = 0 end)
 	-- bug 2: server validates distance but does NOT rubberband, so teleport-grab is safe
 	h.CFrame = CFrame.new(pos + Vector3.new(2, 0, 0))
+	unseat() -- if we landed on a bench, stand back up or the fire won't register
 	task.wait(0.15) -- server needs the char to settle at the new pos before it accepts the fire
 	pcall(fireproximityprompt, pp)
 end
@@ -195,6 +211,7 @@ local function startMovementLoop()
 			local h = hrp()
 			if not h then task.wait(0.25) else
 				if not home then home = h.CFrame end
+				unseat()
 				if S.renta then claimRenta() end
 				if S.collect then collectBottles() end
 				-- Auto-sell once held bottles reach the user-set threshold.
