@@ -48,6 +48,7 @@ local QTY = {1,5,10,20,50,100,150,200,300,500}
 --============================ STATE ============================--
 local S = {
 	collect = false, sell = false, buy = false, scratch = false, renta = false, reward = false,
+	turbo = false, -- collect as fast as possible: no settle wait, more re-sweep passes
 	buyIdx = 1, qtyIdx = 2, -- default Siodemeczki x5
 	sellAt = 500, -- auto-sell fires when held bottles >= this (user-editable)
 }
@@ -179,7 +180,27 @@ end
 -- collected bottle is REMOVED from the folder while a miss stays. So we re-sweep
 -- the still-present bottles a few times: pass 2 catches ~70% of the pass-1 misses,
 -- etc. -> ~99% collected per call, and rare bottles always go first.
+-- Turbo: with the Magnes (ButelkowaPotion) active, standing next to a bottle
+-- vacuums it automatically. So instead of firing prompts, we just teleport the
+-- char through every bottle position as fast as possible and let the magnet grab.
+local function turboCollect()
+	local folder = workspace:FindFirstChild("Butelki")
+	if not folder then return end
+	local h = hrp(); if not h then return end
+	for _, b in ipairs(folder:GetChildren()) do
+		if not (S.collect and S.turbo) then return end
+		if b.Parent then
+			local ok, pos = pcall(function() return b:GetPivot().Position end)
+			if ok then
+				h.CFrame = CFrame.new(pos)
+				task.wait() -- one frame, let the magnet register proximity
+			end
+		end
+	end
+end
+
 local function collectBottles()
+	if S.turbo then return turboCollect() end
 	local folder = workspace:FindFirstChild("Butelki")
 	if not folder then return end
 	for pass = 1, 4 do
@@ -333,7 +354,7 @@ local BG = Color3.fromRGB(24, 24, 32)
 local PANEL = Color3.fromRGB(34, 34, 46)
 local OFF = Color3.fromRGB(60, 60, 72)
 
-local W, FULL_H, MIN_H = 250, 414, 34
+local W, FULL_H, MIN_H = 250, 452, 34
 local main = Instance.new("Frame")
 main.Size = UDim2.fromOffset(W, FULL_H)
 main.Position = UDim2.new(0.5, -W/2, 0.35, 0)
@@ -407,6 +428,7 @@ local function makeToggle(label, key)
 end
 
 makeToggle("Auto Zbieraj Butelki", "collect")
+makeToggle("Turbo (magnes) zbieranie", "turbo")
 makeToggle("Auto Sprzedaj", "sell")
 
 -- editable threshold: sell fires when held bottles >= this value
