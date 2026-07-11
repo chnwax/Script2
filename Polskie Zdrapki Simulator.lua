@@ -43,14 +43,14 @@ local BUYABLE = {
 	{k="LuckyClover",c=2000},{k="Samurai",c=2500},{k="GoldGoldGold",c=3000},{k="KonieWalenie2077",c=5000},
 	{k="RichBilionier",c=10000},
 }
-local QTY = {1,5,10,20,50,100,150,200,300,500}
 
 --============================ STATE ============================--
 local S = {
 	collect = false, sell = false, buy = false, scratch = false, renta = false, reward = false,
 	turbo = false, -- collect as fast as possible: no settle wait, more re-sweep passes
 	turboDelay = 0.1, -- seconds paused at each bottle in turbo (user-editable)
-	buyIdx = 1, qtyIdx = 2, -- default Siodemeczki x5
+	buyWorkers = 8, -- parallel BuyCard threads: more = faster buying (user-editable)
+	buyIdx = 1, -- default card = Siodemeczki
 	sellAt = 500, -- auto-sell fires when held bottles >= this (user-editable)
 }
 local moveThread, buyThread, scratchThread, rewardThread
@@ -260,16 +260,26 @@ end
 local function startBuyLoop()
 	if buyThread then return end
 	buyThread = task.spawn(function()
-		while S.buy and alive() do
-			local sel = BUYABLE[S.buyIdx]
-			-- The server IGNORES the quantity arg: one BuyCard call = one card. Each call
-			-- is a blocking round-trip, so no waits are needed -> RTT-paced, hundreds/sec.
-			if sel and kasa() >= sel.c then
-				pcall(function() ScratchRemote:InvokeServer("BuyCard", sel.k, 1) end)
-			else
-				task.wait(0.3) -- can't afford / no selection: idle briefly
-			end
+		-- Each BuyCard is a blocking round-trip, so a single thread is RTT-capped (~15/s).
+		-- The server accepts concurrent buys, so we run several worker threads at once to
+		-- multiply throughput (~8 workers ~= 100/s). Worker count is user-editable.
+		local active = 0
+		local n = math.clamp(math.floor(S.buyWorkers or 8), 1, 24)
+		for _ = 1, n do
+			active += 1
+			task.spawn(function()
+				while S.buy and alive() do
+					local sel = BUYABLE[S.buyIdx]
+					if sel and kasa() >= sel.c then
+						pcall(function() ScratchRemote:InvokeServer("BuyCard", sel.k, 1) end)
+					else
+						task.wait(0.3) -- can't afford / no selection: idle briefly
+					end
+				end
+				active -= 1
+			end)
 		end
+		while active > 0 do task.wait(0.1) end
 		buyThread = nil
 	end)
 end
@@ -360,7 +370,7 @@ local BG = Color3.fromRGB(24, 24, 32)
 local PANEL = Color3.fromRGB(34, 34, 46)
 local OFF = Color3.fromRGB(60, 60, 72)
 
-local W, FULL_H, MIN_H = 250, 486, 34
+local W, FULL_H, MIN_H = 250, 520, 34
 local main = Instance.new("Frame")
 main.Size = UDim2.fromOffset(W, FULL_H)
 main.Position = UDim2.new(0.5, -W/2, 0.35, 0)
@@ -507,7 +517,7 @@ end
 
 local cardPrev = arrow("<", 0, 0, 24)
 local cardLbl = Instance.new("TextLabel")
-cardLbl.Size = UDim2.new(1, -108, 0, 30)
+cardLbl.Size = UDim2.new(1, -56, 0, 30)
 cardLbl.Position = UDim2.fromOffset(28, 0)
 cardLbl.BackgroundColor3 = PANEL
 cardLbl.Font = Enum.Font.GothamSemibold
@@ -515,13 +525,11 @@ cardLbl.TextSize = 11
 cardLbl.TextColor3 = Color3.fromRGB(235,235,245)
 cardLbl.Parent = selRow
 Instance.new("UICorner", cardLbl).CornerRadius = UDim.new(0, 6)
-local cardNext = arrow(">", 1, -80, 24)
-local qtyBtn = arrow("x5", 1, -52, 52)
+local cardNext = arrow(">", 1, -28, 24)
 
 local function updBuyLabels()
 	local sel = BUYABLE[S.buyIdx]
 	cardLbl.Text = sel.k .. " (" .. sel.c .. ")"
-	qtyBtn.Text = "x" .. QTY[S.qtyIdx]
 end
 cardPrev.MouseButton1Click:Connect(function()
 	S.buyIdx = S.buyIdx - 1; if S.buyIdx < 1 then S.buyIdx = #BUYABLE end; updBuyLabels()
@@ -529,10 +537,13 @@ end)
 cardNext.MouseButton1Click:Connect(function()
 	S.buyIdx = S.buyIdx + 1; if S.buyIdx > #BUYABLE then S.buyIdx = 1 end; updBuyLabels()
 end)
-qtyBtn.MouseButton1Click:Connect(function()
-	S.qtyIdx = S.qtyIdx + 1; if S.qtyIdx > #QTY then S.qtyIdx = 1 end; updBuyLabels()
-end)
 updBuyLabels()
+
+makeNumRow("Kupuj: watki (szybkosc)", tostring(S.buyWorkers), function(t)
+	local n = tonumber(t)
+	if n then S.buyWorkers = math.clamp(math.floor(n), 1, 24) end
+	return tostring(S.buyWorkers)
+end)
 
 -- status
 local status = Instance.new("TextLabel")
