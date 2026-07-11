@@ -83,21 +83,40 @@ local function claimRenta()
 	task.wait(0.2)
 end
 
+-- rank 0 = rare (Srebrna/Zlota/Diamentowa/Teczowa/Galaktyczna/Lsniaca), 1 = Normalna
+local function isRare(bottle)
+	local t = bottle:GetAttribute("BottleType")
+	return t ~= nil and t ~= "Normalna"
+end
+
+local function grab(bottle)
+	local pp = bottle:FindFirstChildWhichIsA("ProximityPrompt", true)
+	if not (pp and pp.Enabled) then return end
+	local h = hrp(); if not h then return end
+	local ok, pos = pcall(function() return bottle:GetPivot().Position end)
+	if not ok then return end
+	-- bug 2: server validates distance but does NOT rubberband, so teleport-grab is safe
+	h.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+	task.wait(0.05)
+	pcall(fireproximityprompt, pp)
+end
+
 local function collectBottles()
 	local folder = workspace:FindFirstChild("Butelki")
 	if not folder then return end
-	for _, bottle in ipairs(folder:GetChildren()) do
-		if not S.collect then break end
-		local pp = bottle:FindFirstChildWhichIsA("ProximityPrompt", true)
-		if pp and pp.Enabled then
-			local h = hrp(); if not h then break end
-			local ok, pos = pcall(function() return bottle:GetPivot().Position end)
-			if ok then
-				h.CFrame = CFrame.new(pos + Vector3.new(0,3,0))
-				task.wait(0.06)
-				pcall(fireproximityprompt, pp)
-			end
-		end
+	local list = folder:GetChildren()
+	-- rare bottles are rare, time-limited spawns worth up to 20000x a Normalna: grab first
+	local rares, normals = {}, {}
+	for _, b in ipairs(list) do
+		if isRare(b) then rares[#rares+1] = b else normals[#normals+1] = b end
+	end
+	for _, b in ipairs(rares) do
+		if not S.collect then return end
+		grab(b)
+	end
+	for _, b in ipairs(normals) do
+		if not S.collect then return end
+		grab(b)
 	end
 end
 
