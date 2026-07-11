@@ -212,13 +212,12 @@ local function startMovementLoop()
 			if not h then task.wait(0.25) else
 				if not home then home = h.CFrame end
 				unseat()
+				-- When it's time to sell, pause collecting for this pass so the char
+				-- goes straight to the Butelkomat instead of teleporting after bottles.
+				local mustSell = S.sell and bottleCount() >= S.sellAt
 				if S.renta then claimRenta() end
-				if S.collect then collectBottles() end
-				-- Auto-sell once held bottles reach the user-set threshold.
-				if S.sell then
-					local cur = bottleCount()
-					if cur and cur >= S.sellAt then sellAllBottles() end
-				end
+				if S.collect and not mustSell then collectBottles() end
+				if mustSell then sellAllBottles() end
 			end
 			task.wait(0.08)
 		end
