@@ -158,22 +158,22 @@ local function isRare(bottle)
 	return t ~= nil and t ~= "Normalna"
 end
 
--- Fire one bottle. The prompt has HoldDuration 0.15 but fireproximityprompt
--- completes instantly (no real hold). We set HoldDuration=0 locally too so the
--- on-screen prompt never shows a hold ring. Teleport is beside the bottle at its
--- own height (side offset collects more reliably than sitting on top of it).
+-- Collect one bottle. Bottles are picked up by PROXIMITY (walking onto them), so
+-- we teleport the char directly onto the bottle's position. If the bottle also has
+-- a ProximityPrompt we fire it too as a fallback. Not gating on the prompt matters:
+-- prompt-less / disabled-prompt bottles were being skipped entirely before, which
+-- is why collection returned 0.
 local function grab(bottle)
-	local pp = bottle:FindFirstChildWhichIsA("ProximityPrompt", true)
-	if not (pp and pp.Enabled) then return end
 	local h = hrp(); if not h then return end
 	local ok, pos = pcall(function() return bottle:GetPivot().Position end)
 	if not ok then return end
-	pcall(function() pp.HoldDuration = 0 end)
-	-- bug 2: server validates distance but does NOT rubberband, so teleport-grab is safe
-	h.CFrame = CFrame.new(pos + Vector3.new(2, 0, 0))
-	unseat() -- if we landed on a bench, stand back up or the fire won't register
-	task.wait(0.15) -- server needs the char to settle at the new pos before it accepts the fire
-	pcall(fireproximityprompt, pp)
+	-- stand ON the bottle so proximity/touch pickup triggers (server doesn't rubberband)
+	h.CFrame = CFrame.new(pos)
+	unseat() -- if we landed on a bench, stand back up
+	local pp = bottle:FindFirstChildWhichIsA("ProximityPrompt", true)
+	if pp then pcall(function() pp.HoldDuration = 0 end) end
+	task.wait(0.12) -- let the char settle so pickup registers
+	if pp and pp.Enabled then pcall(fireproximityprompt, pp) end
 end
 
 -- Each fire only lands ~70% of the time (server drops some triggers), but a
@@ -213,10 +213,7 @@ local function collectBottles()
 		for _, grp in ipairs({ rares, normals }) do
 			for _, b in ipairs(grp) do
 				if not S.collect then return end
-				if b.Parent then
-					local pp = b:FindFirstChildWhichIsA("ProximityPrompt", true)
-					if pp and pp.Enabled then fired = true; grab(b) end
-				end
+				if b.Parent then fired = true; grab(b) end
 			end
 		end
 		if not fired then break end       -- nothing left to collect
