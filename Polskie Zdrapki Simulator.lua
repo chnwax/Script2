@@ -188,7 +188,7 @@ local function turboCollect()
 	if not folder then return end
 	local h = hrp(); if not h then return end
 	for _, b in ipairs(folder:GetChildren()) do
-		if not (S.collect and S.turbo) then return end
+		if not S.turbo then return end
 		if b.Parent then
 			local ok, pos = pcall(function() return b:GetPivot().Position end)
 			if ok then
@@ -225,7 +225,7 @@ local function startMovementLoop()
 	if moveThread then return end
 	moveThread = task.spawn(function()
 		local home
-		while (S.collect or S.sell or S.renta) and alive() do
+		while (S.collect or S.turbo or S.sell or S.renta) and alive() do
 			local h = hrp()
 			if not h then task.wait(0.25) else
 				if not home then home = h.CFrame end
@@ -234,7 +234,7 @@ local function startMovementLoop()
 				-- goes straight to the Butelkomat instead of teleporting after bottles.
 				local mustSell = S.sell and bottleCount() >= S.sellAt
 				if S.renta then claimRenta() end
-				if S.collect and not mustSell then collectBottles() end
+				if (S.collect or S.turbo) and not mustSell then collectBottles() end
 				if mustSell then sellAllBottles() end
 			end
 			task.wait(0.08)
