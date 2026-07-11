@@ -49,6 +49,7 @@ local QTY = {1,5,10,20,50,100,150,200,300,500}
 local S = {
 	collect = false, sell = false, buy = false, scratch = false, renta = false, reward = false,
 	buyIdx = 1, qtyIdx = 2, -- default Siodemeczki x5
+	sellAt = 500, -- auto-sell fires when held bottles >= this (user-editable)
 }
 local moveThread, remoteThread, rewardThread
 
@@ -196,10 +197,10 @@ local function startMovementLoop()
 				if not home then home = h.CFrame end
 				if S.renta then claimRenta() end
 				if S.collect then collectBottles() end
-				-- Auto-sell only when the bottle inventory is at full capacity.
+				-- Auto-sell once held bottles reach the user-set threshold.
 				if S.sell then
-					local cur, max = bottleCount()
-					if cur and max and max > 0 and cur >= max then sellAllBottles() end
+					local cur = bottleCount()
+					if cur and cur >= S.sellAt then sellAllBottles() end
 				end
 			end
 			task.wait(0.08)
@@ -316,7 +317,7 @@ local BG = Color3.fromRGB(24, 24, 32)
 local PANEL = Color3.fromRGB(34, 34, 46)
 local OFF = Color3.fromRGB(60, 60, 72)
 
-local W, FULL_H, MIN_H = 250, 380, 34
+local W, FULL_H, MIN_H = 250, 414, 34
 local main = Instance.new("Frame")
 main.Size = UDim2.fromOffset(W, FULL_H)
 main.Position = UDim2.new(0.5, -W/2, 0.35, 0)
@@ -390,7 +391,42 @@ local function makeToggle(label, key)
 end
 
 makeToggle("Auto Zbieraj Butelki", "collect")
-makeToggle("Auto Sprzedaj (gdy full)", "sell")
+makeToggle("Auto Sprzedaj", "sell")
+
+-- editable threshold: sell fires when held bottles >= this value
+local sellRow = Instance.new("Frame")
+sellRow.Size = UDim2.new(1, 0, 0, 28)
+sellRow.BackgroundTransparency = 1
+sellRow.LayoutOrder = nextOrder()
+sellRow.Parent = body
+
+local sellLbl = Instance.new("TextLabel")
+sellLbl.Size = UDim2.new(1, -70, 1, 0)
+sellLbl.BackgroundTransparency = 1
+sellLbl.Font = Enum.Font.Gotham
+sellLbl.TextSize = 12
+sellLbl.TextColor3 = Color3.fromRGB(190,190,205)
+sellLbl.TextXAlignment = Enum.TextXAlignment.Left
+sellLbl.Text = "Sprzedaj gdy butelek >="
+sellLbl.Parent = sellRow
+
+local sellBox = Instance.new("TextBox")
+sellBox.Size = UDim2.fromOffset(62, 26)
+sellBox.Position = UDim2.new(1, -62, 0, 1)
+sellBox.BackgroundColor3 = PANEL
+sellBox.Font = Enum.Font.GothamBold
+sellBox.TextSize = 13
+sellBox.TextColor3 = Color3.fromRGB(235,235,245)
+sellBox.ClearTextOnFocus = false
+sellBox.Text = tostring(S.sellAt)
+sellBox.Parent = sellRow
+Instance.new("UICorner", sellBox).CornerRadius = UDim.new(0, 6)
+sellBox.FocusLost:Connect(function()
+	local n = tonumber(sellBox.Text)
+	if n and n > 0 then S.sellAt = math.floor(n) end
+	sellBox.Text = tostring(S.sellAt)
+end)
+
 makeToggle("Auto Zdrapuj", "scratch")
 makeToggle("Auto Odbieraj Rente", "renta")
 makeToggle("Auto Odbieraj Nagrody", "reward")
