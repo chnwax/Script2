@@ -83,15 +83,15 @@ local function heldBottleTool()
 	if c then for _,v in ipairs(c:GetChildren()) do if v:IsA("Tool") and v:GetAttribute("BottleType") then return v end end end
 	return nil
 end
--- Reads the HUD bottle counter "cur/max" (PlayerGui.HUD.Inventory.Limit) -> cur, max
+-- Held bottles are Tools carrying a BottleType attribute (Backpack + Character).
+-- The HUD "Limit" label tracks a different inventory, so we count the tools.
 local function bottleCount()
-	local pg = lp:FindFirstChild("PlayerGui")
-	local hud = pg and pg:FindFirstChild("HUD")
-	local inv = hud and hud:FindFirstChild("Inventory")
-	local lim = inv and inv:FindFirstChild("Limit")
-	if not (lim and lim:IsA("TextLabel")) then return nil, nil end
-	local cur, max = lim.Text:match("(%d+)%s*/%s*(%d+)")
-	return tonumber(cur), tonumber(max)
+	local n = 0
+	local bp = lp:FindFirstChild("Backpack")
+	if bp then for _, v in ipairs(bp:GetChildren()) do if v:GetAttribute("BottleType") then n = n + 1 end end end
+	local c = char()
+	if c then for _, v in ipairs(c:GetChildren()) do if v:GetAttribute("BottleType") then n = n + 1 end end end
+	return n
 end
 
 --============================ MOVEMENT WORKER (collect/sell/renta) ============================--
