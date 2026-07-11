@@ -25,6 +25,12 @@ end
 
 --============================ REMOTES / CONFIG ============================--
 local ScratchRemote = RS:WaitForChild("ScratchCardRemote")
+local ClaimRewardsRemote = RS:WaitForChild("ClaimRewardsRemote")
+
+-- Playtime rewards: reward Id -> seconds of PlayTimeSession required (from
+-- PlaytimeRewardsClient). Server validates; we claim any that are unlocked and
+-- not yet taken (attribute RewardClaimed_<Id>).
+local REWARD_TIMES = {60,300,600,900,1200,1800,2700,3600,4500,5400,6300,7200}
 
 -- buyable card types (name -> cost), cheapest first
 local BUYABLE = {
@@ -41,10 +47,10 @@ local QTY = {1,5,10,20,50,100,150,200,300,500}
 
 --============================ STATE ============================--
 local S = {
-	collect = false, sell = false, buy = false, scratch = false, renta = false,
+	collect = false, sell = false, buy = false, scratch = false, renta = false, reward = false,
 	buyIdx = 1, qtyIdx = 2, -- default Siodemeczki x5
 }
-local moveThread, remoteThread
+local moveThread, remoteThread, rewardThread
 
 --============================ HELPERS ============================--
 local function char() return lp.Character end
@@ -60,6 +66,16 @@ local function heldBottleTool()
 	local c=char()
 	if c then for _,v in ipairs(c:GetChildren()) do if v:IsA("Tool") and v:GetAttribute("BottleType") then return v end end end
 	return nil
+end
+-- Reads the HUD bottle counter "cur/max" (PlayerGui.HUD.Inventory.Limit) -> cur, max
+local function bottleCount()
+	local pg = lp:FindFirstChild("PlayerGui")
+	local hud = pg and pg:FindFirstChild("HUD")
+	local inv = hud and hud:FindFirstChild("Inventory")
+	local lim = inv and inv:FindFirstChild("Limit")
+	if not (lim and lim:IsA("TextLabel")) then return nil, nil end
+	local cur, max = lim.Text:match("(%d+)%s*/%s*(%d+)")
+	return tonumber(cur), tonumber(max)
 end
 
 --============================ MOVEMENT WORKER (collect/sell/renta) ============================--
@@ -180,7 +196,11 @@ local function startMovementLoop()
 				if not home then home = h.CFrame end
 				if S.renta then claimRenta() end
 				if S.collect then collectBottles() end
-				if S.sell then sellAllBottles() end
+				-- Auto-sell only when the bottle inventory is at full capacity.
+				if S.sell then
+					local cur, max = bottleCount()
+					if cur and max and max > 0 and cur >= max then sellAllBottles() end
+				end
 			end
 			task.wait(0.08)
 		end
@@ -236,6 +256,27 @@ local function startRemoteLoop()
 	end)
 end
 
+--============================ REWARD WORKER (playtime rewards) ============================--
+local function claimRewards()
+	local sess = lp:GetAttribute("PlayTimeSession") or 0
+	for id, need in ipairs(REWARD_TIMES) do
+		if sess >= need and lp:GetAttribute("RewardClaimed_" .. id) ~= true then
+			pcall(function() ClaimRewardsRemote:InvokeServer(id) end)
+		end
+	end
+end
+
+local function startRewardLoop()
+	if rewardThread then return end
+	rewardThread = task.spawn(function()
+		while S.reward and alive() do
+			claimRewards()
+			task.wait(5)
+		end
+		rewardThread = nil
+	end)
+end
+
 -- one-shot: scratch every card in inventory (bound to F)
 local scratchingAll = false
 local function scratchAllOnce()
@@ -275,7 +316,7 @@ local BG = Color3.fromRGB(24, 24, 32)
 local PANEL = Color3.fromRGB(34, 34, 46)
 local OFF = Color3.fromRGB(60, 60, 72)
 
-local W, FULL_H, MIN_H = 250, 340, 34
+local W, FULL_H, MIN_H = 250, 380, 34
 local main = Instance.new("Frame")
 main.Size = UDim2.fromOffset(W, FULL_H)
 main.Position = UDim2.new(0.5, -W/2, 0.35, 0)
@@ -340,16 +381,19 @@ local function makeToggle(label, key)
 	btn.MouseButton1Click:Connect(function()
 		S[key] = not S[key]
 		refresh()
-		if key == "buy" or key == "scratch" then startRemoteLoop() else startMovementLoop() end
+		if key == "buy" or key == "scratch" then startRemoteLoop()
+		elseif key == "reward" then startRewardLoop()
+		else startMovementLoop() end
 	end)
 	refresh()
 	return btn
 end
 
 makeToggle("Auto Zbieraj Butelki", "collect")
-makeToggle("Auto Sprzedaj (All)", "sell")
+makeToggle("Auto Sprzedaj (gdy full)", "sell")
 makeToggle("Auto Zdrapuj", "scratch")
 makeToggle("Auto Odbieraj Rente", "renta")
+makeToggle("Auto Odbieraj Nagrody", "reward")
 
 -- Buy row with card + qty selectors
 local buyBtn = makeToggle("Auto Kupuj Zdrapki", "buy")
