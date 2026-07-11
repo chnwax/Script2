@@ -50,6 +50,7 @@ local S = {
 	turbo = false, -- collect as fast as possible: no settle wait, more re-sweep passes
 	turboDelay = 0.1, -- seconds paused at each bottle in turbo (user-editable)
 	buyWorkers = 8, -- parallel BuyCard threads: more = faster buying (user-editable)
+	buyBuffer = 50, -- when scratch is also on, stop buying once inventory hits this (user-editable)
 	buyIdx = 1, -- default card = Siodemeczki
 	sellAt = 500, -- auto-sell fires when held bottles >= this (user-editable)
 }
@@ -263,17 +264,34 @@ local function startBuyLoop()
 		-- Each BuyCard is a blocking round-trip, so a single thread is RTT-capped (~15/s).
 		-- The server accepts concurrent buys, so we run several worker threads at once to
 		-- multiply throughput (~8 workers ~= 100/s). Worker count is user-editable.
+		-- Scratching is server-serialized (~10/s), so uncapped buying floods the inventory.
+		-- A poller tracks inventory size; while scratch is on we stop buying once it reaches
+		-- buyBuffer, keeping scratch fed without piling up thousands of unscratched cards.
+		local invCount = 0
+		task.spawn(function()
+			while S.buy and alive() do
+				local inv
+				pcall(function() inv = ScratchRemote:InvokeServer("GetInventory") end)
+				if inv and inv.Inventory then invCount = #inv.Inventory end
+				task.wait(0.25)
+			end
+		end)
 		local active = 0
 		local n = math.clamp(math.floor(S.buyWorkers or 8), 1, 24)
 		for _ = 1, n do
 			active += 1
 			task.spawn(function()
 				while S.buy and alive() do
-					local sel = BUYABLE[S.buyIdx]
-					if sel and kasa() >= sel.c then
-						pcall(function() ScratchRemote:InvokeServer("BuyCard", sel.k, 1) end)
+					if S.scratch and invCount >= S.buyBuffer then
+						task.wait(0.1) -- buffer full: let scratch catch up
 					else
-						task.wait(0.3) -- can't afford / no selection: idle briefly
+						local sel = BUYABLE[S.buyIdx]
+						if sel and kasa() >= sel.c then
+							pcall(function() ScratchRemote:InvokeServer("BuyCard", sel.k, 1) end)
+							invCount += 1
+						else
+							task.wait(0.3) -- can't afford / no selection: idle briefly
+						end
 					end
 				end
 				active -= 1
@@ -370,7 +388,7 @@ local BG = Color3.fromRGB(24, 24, 32)
 local PANEL = Color3.fromRGB(34, 34, 46)
 local OFF = Color3.fromRGB(60, 60, 72)
 
-local W, FULL_H, MIN_H = 250, 520, 34
+local W, FULL_H, MIN_H = 250, 554, 34
 local main = Instance.new("Frame")
 main.Size = UDim2.fromOffset(W, FULL_H)
 main.Position = UDim2.new(0.5, -W/2, 0.35, 0)
@@ -543,6 +561,11 @@ makeNumRow("Kupuj: watki (szybkosc)", tostring(S.buyWorkers), function(t)
 	local n = tonumber(t)
 	if n then S.buyWorkers = math.clamp(math.floor(n), 1, 24) end
 	return tostring(S.buyWorkers)
+end)
+makeNumRow("Bufor zdrapek (max)", tostring(S.buyBuffer), function(t)
+	local n = tonumber(t)
+	if n and n > 0 then S.buyBuffer = math.floor(n) end
+	return tostring(S.buyBuffer)
 end)
 
 -- status
