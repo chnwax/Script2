@@ -37,7 +37,7 @@ local BUYABLE = {
 	{k="LuckyClover",c=2000},{k="Samurai",c=2500},{k="GoldGoldGold",c=3000},{k="KonieWalenie2077",c=5000},
 	{k="RichBilionier",c=10000},
 }
-local QTY = {1,5,10,20,50,100}
+local QTY = {1,5,10,20,50,100,150,200,300,500}
 
 --============================ STATE ============================--
 local S = {
@@ -125,34 +125,48 @@ local function isRare(bottle)
 	return t ~= nil and t ~= "Normalna"
 end
 
+-- Fire one bottle. The prompt has HoldDuration 0.15 but fireproximityprompt
+-- completes instantly (no real hold). We set HoldDuration=0 locally too so the
+-- on-screen prompt never shows a hold ring. Teleport is beside the bottle at its
+-- own height (side offset collects more reliably than sitting on top of it).
 local function grab(bottle)
 	local pp = bottle:FindFirstChildWhichIsA("ProximityPrompt", true)
 	if not (pp and pp.Enabled) then return end
 	local h = hrp(); if not h then return end
 	local ok, pos = pcall(function() return bottle:GetPivot().Position end)
 	if not ok then return end
+	pcall(function() pp.HoldDuration = 0 end)
 	-- bug 2: server validates distance but does NOT rubberband, so teleport-grab is safe
-	h.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+	h.CFrame = CFrame.new(pos + Vector3.new(2, 0, 0))
 	task.wait(0.05)
 	pcall(fireproximityprompt, pp)
 end
 
+-- Each fire only lands ~70% of the time (server drops some triggers), but a
+-- collected bottle is REMOVED from the folder while a miss stays. So we re-sweep
+-- the still-present bottles a few times: pass 2 catches ~70% of the pass-1 misses,
+-- etc. -> ~99% collected per call, and rare bottles always go first.
 local function collectBottles()
 	local folder = workspace:FindFirstChild("Butelki")
 	if not folder then return end
-	local list = folder:GetChildren()
-	-- rare bottles are rare, time-limited spawns worth up to 20000x a Normalna: grab first
-	local rares, normals = {}, {}
-	for _, b in ipairs(list) do
-		if isRare(b) then rares[#rares+1] = b else normals[#normals+1] = b end
-	end
-	for _, b in ipairs(rares) do
+	for pass = 1, 4 do
 		if not S.collect then return end
-		grab(b)
-	end
-	for _, b in ipairs(normals) do
-		if not S.collect then return end
-		grab(b)
+		local rares, normals = {}, {}
+		for _, b in ipairs(folder:GetChildren()) do
+			if isRare(b) then rares[#rares+1] = b else normals[#normals+1] = b end
+		end
+		local fired = false
+		for _, grp in ipairs({ rares, normals }) do
+			for _, b in ipairs(grp) do
+				if not S.collect then return end
+				if b.Parent then
+					local pp = b:FindFirstChildWhichIsA("ProximityPrompt", true)
+					if pp and pp.Enabled then fired = true; grab(b) end
+				end
+			end
+		end
+		if not fired then break end       -- nothing left to collect
+		if pass < 4 then task.wait(0.35) end -- let removals replicate before retry
 	end
 end
 
@@ -183,13 +197,20 @@ local function startRemoteLoop()
 	remoteThread = task.spawn(function()
 		while (S.buy or S.scratch) and alive() do
 			if S.buy then
-				local sel = BUYABLE[S.buyIdx]; local q = QTY[S.qtyIdx]
-				if sel and kasa() >= sel.c * q then
-					pcall(function() ScratchRemote:InvokeServer("BuyCard", sel.k, q) end)
-					task.wait(0.25)
-				else
-					task.wait(0.4)
+				local sel = BUYABLE[S.buyIdx]
+				local want = QTY[S.qtyIdx]
+				-- The server IGNORES the quantity arg: one BuyCard call = one card, no
+				-- matter what number is passed. So to buy "want" cards we loop the call.
+				-- Each call is a blocking round-trip, so no waits are needed -> RTT-paced,
+				-- hundreds of cards per second.
+				local bought = 0
+				if sel then
+					while bought < want and kasa() >= sel.c and S.buy and alive() do
+						pcall(function() ScratchRemote:InvokeServer("BuyCard", sel.k, 1) end)
+						bought = bought + 1
+					end
 				end
+				if bought == 0 then task.wait(0.3) end -- can't afford: idle briefly
 			end
 			if S.scratch then
 				local inv
@@ -210,7 +231,6 @@ local function startRemoteLoop()
 				end
 				if did == 0 then task.wait(0.15) end -- idle: nothing to scratch
 			end
-			if not S.scratch then task.wait(0.1) end
 		end
 		remoteThread = nil
 	end)
