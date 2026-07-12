@@ -130,26 +130,29 @@ local function killSteer(pos, fwd)
 end
 
 -- czy skoczyc: stopien w przod / przepasc z ladowaniem
-local function shouldJump(pos, fwd)
+-- zwraca akcje ruchu: "walk" | "step" | "gap" | "wall" | "edge"
+local function sense(pos, fwd, dy)
 	local feetY=pos.Y-2.6
-	-- sciana/stopien tuz przed
-	local wall=cast(pos, fwd*3.2)
+	-- sciana/stopien tuz przed (nogi i klatka)
+	local wall=cast(pos+Vector3.new(0,-1,0), fwd*3.0) or cast(pos, fwd*3.0)
 	if wall then
-		local top=cast(wall.Position+fwd*0.4+Vector3.new(0,CFG.maxJumpH+1,0), Vector3.new(0,-(CFG.maxJumpH+3),0))
+		local top=cast(wall.Position+fwd*0.5+Vector3.new(0,CFG.maxJumpH+2,0), Vector3.new(0,-(CFG.maxJumpH+4),0))
 		if top then
 			local rise=top.Position.Y-feetY
-			if rise>0.8 and rise<=CFG.maxJumpH then return true,"step" end
+			if rise<=CFG.maxJumpH then return "step" end  -- doskoczy na gore
 		end
-		return false,"wall_high"
+		return "wall"  -- za wysokie -> omin bokiem
 	end
-	-- przepasc przed nami?
-	local ahead=pos+fwd*3
-	local gnd=cast(ahead+Vector3.new(0,3,0), Vector3.new(0,-9,0))
-	if not gnd then
-		local far=cast(pos+fwd*7+Vector3.new(0,4,0), Vector3.new(0,-16,0))
-		if far then return true,"gap" end
+	-- podloga tuz przed?
+	if cast(pos+fwd*2.5+Vector3.new(0,2,0), Vector3.new(0,-7,0)) then return "walk" end
+	-- przepasc -> ladowanie w zasiegu skoku?
+	for _,d in ipairs({4,6,8,10}) do
+		local land=cast(pos+fwd*d+Vector3.new(0,3,0), Vector3.new(0,-18,0))
+		if land and land.Position.Y<=pos.Y+2 then return "gap" end
 	end
-	return false,nil
+	-- cel wyraznie ponizej -> kontrolowany zeskok ok
+	if dy<-4 then return "walk" end
+	return "edge"  -- krawedz w przepasc: NIE schodz
 end
 
 --==================================================================
@@ -239,39 +242,41 @@ local function parkourStep(dt)
 
 	local fwd = horiz>0.1 and flat.Unit or r.CFrame.LookVector
 	local dir = killSteer(r.Position, fwd)
-
 	h.WalkSpeed=CFG.walkSpeed
-	h:Move(dir,false)
 
-	-- skok: sensing
+	local ground=grounded()
 	jumpCd-=dt
-	if grounded() and jumpCd<=0 then
-		local jump=shouldJump(r.Position, dir)
-		if jump then h.Jump=true; jumpCd=CFG.jumpCd end
+	local act=sense(r.Position, dir, dy)
+	local moveDir=dir
+
+	if act=="step" or act=="gap" then
+		if ground and jumpCd<=0 then h.Jump=true; jumpCd=CFG.jumpCd end
+	elseif act=="wall" then
+		-- omin bokiem po stronie z podloga
+		local lft=Vector3.new(-dir.Z,0,dir.X)
+		local sideR=cast(r.Position+lft*3+Vector3.new(0,2,0), Vector3.new(0,-7,0))
+		local pick=sideR and 1 or -1
+		moveDir=(dir*0.4+lft*pick).Unit
+	elseif act=="edge" then
+		-- NIE schodz w przepasc: szukaj podlogi bokiem
+		local lft=Vector3.new(-dir.Z,0,dir.X)
+		local pick=(math.floor(os.clock()*1.5)%2==0) and 1 or -1
+		local sideGnd=cast(r.Position+lft*pick*3+Vector3.new(0,2,0), Vector3.new(0,-7,0))
+		moveDir = sideGnd and (lft*pick) or Vector3.zero
 	end
+
+	h:Move(moveDir,false)
 
 	-- anty-zaciecie (escalacja)
 	local sp=r.Position-lastPos
 	lastPos=r.Position
 	local flatMove=Vector3.new(sp.X,0,sp.Z).Magnitude
-	if flatMove < CFG.walkSpeed*dt*0.25 then
-		stuckT+=dt
-	else
-		stuckT=0
-	end
-	if stuckT>CFG.stuckJump and grounded() and jumpCd<=0 then
-		h.Jump=true; jumpCd=CFG.jumpCd
-	end
-	if stuckT>CFG.stuckSide then
-		local lft=Vector3.new(-dir.Z,0,dir.X)
-		local pick=(math.floor(stuckT*2)%2==0) and 1 or -1
-		h:Move((dir+lft*pick*1.3).Unit,false)
-	end
-	if stuckT>CFG.stuckMantle and dy>1 then
-		-- podciagniecie: krotki wspin na polke ktorej nie da sie doskoczyc
+	if flatMove < CFG.walkSpeed*dt*0.25 then stuckT+=dt else stuckT=0 end
+	if stuckT>CFG.stuckJump and ground and jumpCd<=0 then h.Jump=true; jumpCd=CFG.jumpCd end
+	if stuckT>CFG.stuckMantle and dy>1 and act~="edge" then
+		-- podciagniecie na polke ktorej nie da sie doskoczyc
 		local up=math.min(dy,4)
 		r.CFrame = r.CFrame + Vector3.new(dir.X,0,dir.Z)*1.6 + Vector3.new(0,up*0.6,0)
-		r.AssemblyLinearVelocity=Vector3.new(r.AssemblyLinearVelocity.X,0,r.AssemblyLinearVelocity.Z)
 		stuckT=CFG.stuckSide
 	end
 end
@@ -430,7 +435,8 @@ local rsConn=RunService.RenderStepped:Connect(function(dt)
 		or (S.freecam and "Freecam: LPM=cel PPM=obrot" or "Gotowy")
 	status.TextColor3 = S.traveling and Color3.fromRGB(230,200,120) or Color3.fromRGB(160,200,160)
 end)
-local hbConn=RunService.Heartbeat:Connect(parkourStep)
+-- WAZNE: Move musi leciec PO control module (inaczej zeruje MoveDirection przed fizyka)
+RunService:BindToRenderStep("TohParkourMove", Enum.RenderPriority.Character.Value+5, parkourStep)
 
 LP.CharacterAdded:Connect(function()
 	S.traveling=false
@@ -440,7 +446,7 @@ end)
 
 _G.__TohParkour=function()
 	pcall(function() rsConn:Disconnect() end)
-	pcall(function() hbConn:Disconnect() end)
+	pcall(function() RunService:UnbindFromRenderStep("TohParkourMove") end)
 	S.traveling=false
 	pcall(function() gui:Destroy() end)
 	pcall(function() cam.CameraType=Enum.CameraType.Custom end)
