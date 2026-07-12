@@ -261,50 +261,39 @@ end
 local function startBuyLoop()
 	if buyThread then return end
 	buyThread = task.spawn(function()
-		-- Each BuyCard is a blocking round-trip, so a single thread is RTT-capped (~15/s).
-		-- The server accepts concurrent buys, so we run several worker threads at once to
-		-- multiply throughput (~8 workers ~= 100/s). Worker count is user-editable.
-		-- Scratching is server-serialized (~10/s), so uncapped buying floods the inventory.
-		-- A poller tracks inventory size; while scratch is on we stop buying once it reaches
-		-- buyBuffer, keeping scratch fed without piling up thousands of unscratched cards.
-		-- Seed the count synchronously first so workers respect the buffer immediately,
-		-- instead of buying blind during the poller's first 0.25s window.
-		local invCount = 0
-		do
+		-- Each BuyCard is a blocking round-trip (~1 RTT). The server accepts concurrent
+		-- buys, so we fire several at once to multiply throughput (~8 => ~100/s).
+		-- Scratching is server-serialized (~10/s), so uncapped parallel buying overshoots
+		-- the inventory badly. Fix: a coordinator re-reads the real inventory each round
+		-- and buys ONLY the deficit up to buyBuffer (capped by the worker count), so the
+		-- inventory settles right around the buffer instead of blowing past it. With scratch
+		-- off there's no cap, so it buys at full speed.
+		local n = math.clamp(math.floor(S.buyWorkers or 8), 1, 24)
+		while S.buy and alive() do
 			local inv
 			pcall(function() inv = ScratchRemote:InvokeServer("GetInventory") end)
-			if inv and inv.Inventory then invCount = #inv.Inventory end
-		end
-		task.spawn(function()
-			while S.buy and alive() do
-				local inv
-				pcall(function() inv = ScratchRemote:InvokeServer("GetInventory") end)
-				if inv and inv.Inventory then invCount = #inv.Inventory end
-				task.wait(0.25)
-			end
-		end)
-		local active = 0
-		local n = math.clamp(math.floor(S.buyWorkers or 8), 1, 24)
-		for _ = 1, n do
-			active += 1
-			task.spawn(function()
-				while S.buy and alive() do
-					if S.scratch and invCount >= S.buyBuffer then
-						task.wait(0.1) -- buffer full: let scratch catch up
-					else
-						local sel = BUYABLE[S.buyIdx]
-						if sel and kasa() >= sel.c then
+			local cnt = (inv and inv.Inventory) and #inv.Inventory or 0
+			local target = S.scratch and S.buyBuffer or math.huge
+			local deficit = target - cnt
+			local sel = BUYABLE[S.buyIdx]
+			if deficit <= 0 then
+				task.wait(0.1) -- buffer full: let scratch catch up
+			elseif not (sel and kasa() >= sel.c) then
+				task.wait(0.3) -- can't afford / no selection
+			else
+				local batch = math.min(deficit, n)
+				local done = 0
+				for _ = 1, batch do
+					task.spawn(function()
+						if kasa() >= sel.c then
 							pcall(function() ScratchRemote:InvokeServer("BuyCard", sel.k, 1) end)
-							invCount += 1
-						else
-							task.wait(0.3) -- can't afford / no selection: idle briefly
 						end
-					end
+						done += 1
+					end)
 				end
-				active -= 1
-			end)
+				while done < batch do task.wait() end
+			end
 		end
-		while active > 0 do task.wait(0.1) end
 		buyThread = nil
 	end)
 end
