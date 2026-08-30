@@ -49,6 +49,7 @@ local State = {
     craftContainer = (PreviousState and PreviousState.craftContainer) or "Small Bouquet",
     craftAmount = math.clamp((PreviousState and PreviousState.craftAmount) or 1, 1, 10),
     lastCraftPreset = nil,
+    activeCraftFlower = nil,
     busy = {},
     equipmentBusy = false,
     afkConnection = nil,
@@ -207,23 +208,62 @@ local function bestSeed()
     return best, best and best:GetAttribute("SeedType") or nil, math.max(bestCount, 0)
 end
 
-local function firstFlower()
-    local bestTool, bestName, bestCount = nil, nil, 0
+local function flowerInventoryByName()
     local totals = {}
-    local tools = {}
     for _, tool in ipairs(containersForTools()) do
         if isFlowerTool(tool) and not tool:GetAttribute("IsArrangement") then
             local name = tool.Name
             totals[name] = (totals[name] or 0) + (tool:GetAttribute("Count") or 1)
-            tools[name] = tools[name] or tool
         end
     end
+    return totals
+end
+
+local function buildCraftFlowerPlan(capacity, requestedBatch)
+    local totals = flowerInventoryByName()
+    local richestName, richestCount, totalCount = nil, 0, 0
     for name, count in pairs(totals) do
-        if count > bestCount then
-            bestTool, bestName, bestCount = tools[name], name, count
+        totalCount += count
+        if count >= capacity and count > richestCount then
+            richestName, richestCount = name, count
         end
     end
-    return bestTool, bestName, bestCount
+
+    local selectedName = State.activeCraftFlower
+    local selectedCount = selectedName and (totals[selectedName] or 0) or 0
+    if selectedCount < capacity then
+        selectedName, selectedCount = richestName, richestCount
+        State.activeCraftFlower = selectedName
+    end
+
+    if selectedName and selectedCount >= capacity then
+        local batchAmount = math.min(requestedBatch, math.floor(selectedCount / capacity))
+        local flowers = {}
+        for _ = 1, capacity do
+            flowers[#flowers + 1] = selectedName
+        end
+        return flowers, batchAmount, selectedName, false, totalCount
+    end
+
+    if totalCount >= capacity then
+        State.activeCraftFlower = nil
+        local flowers = {}
+        for _ = 1, capacity do
+            local availableNames = {}
+            for name, count in pairs(totals) do
+                if count > 0 then
+                    availableNames[#availableNames + 1] = name
+                end
+            end
+            local chosenName = availableNames[math.random(1, #availableNames)]
+            flowers[#flowers + 1] = chosenName
+            totals[chosenName] -= 1
+        end
+        return flowers, 1, "mixed leftovers", true, totalCount
+    end
+
+    State.activeCraftFlower = nil
+    return nil, 0, nil, false, totalCount
 end
 
 local function firstArrangement()
@@ -741,16 +781,11 @@ local function craftCycle()
             end)
         end
 
-        local flower, flowerName, haveCount = firstFlower()
-        if not flower then
-            return
-        end
-
         local containerConfig = MenuConfig.Containers and MenuConfig.Containers[State.craftContainer]
         local flowersPerArrangement = math.max((containerConfig and containerConfig.maxFlowers) or 1, 1)
-        local batchAmount = math.min(State.craftAmount, math.floor(haveCount / flowersPerArrangement))
-        if batchAmount < 1 then
-            setStatus(string.format("Craft waiting: %d/%d %s for full %s", haveCount, flowersPerArrangement, flowerName, State.craftContainer))
+        local recipeFlowers, batchAmount, flowerLabel, mixedRecipe, totalFlowers = buildCraftFlowerPlan(flowersPerArrangement, State.craftAmount)
+        if not recipeFlowers or batchAmount < 1 then
+            setStatus(string.format("Craft waiting: %d/%d total flowers for full %s", totalFlowers, flowersPerArrangement, State.craftContainer))
             return
         end
 
@@ -772,9 +807,9 @@ local function craftCycle()
         else
             State.lastCraftPreset = nil
         end
-        for _ = 1, flowersPerArrangement do
+        for _, recipeFlowerName in ipairs(recipeFlowers) do
             local reserved, reserveMessage = serviceCall(function()
-                return ArrangementService:ReserveFlower(flowerName)
+                return ArrangementService:ReserveFlower(recipeFlowerName)
             end)
             if not reserved then
                 serviceCall(function()
@@ -783,7 +818,7 @@ local function craftCycle()
                 setStatus("Craft reserve failed: " .. tostring(reserveMessage))
                 return
             end
-            recipe.flowers[#recipe.flowers + 1] = flowerName
+            recipe.flowers[#recipe.flowers + 1] = recipeFlowerName
         end
 
         local finished, finishMessage = serviceCall(function()
@@ -794,7 +829,8 @@ local function craftCycle()
         end)
         if finished then
             local presetText = State.lastCraftPreset and (" | " .. State.lastCraftPreset) or ""
-            setStatus(string.format("Crafting %dx %s (%d flowers each)%s", batchAmount, State.craftContainer, flowersPerArrangement, presetText))
+            local flowerText = mixedRecipe and "mixed leftovers" or flowerLabel
+            setStatus(string.format("Crafting %dx %s (%d flowers each, %s)%s", batchAmount, State.craftContainer, flowersPerArrangement, flowerText, presetText))
         else
             serviceCall(function()
                 return ArrangementService:CancelArranging()
@@ -1230,6 +1266,8 @@ local function createToggle(labelText, detailText, key, order)
             State.harvestDirty = true
         elseif State[key] and key == "autoDisplay" then
             State.displayDirty = true
+        elseif State[key] and key == "autoCraft" then
+            State.activeCraftFlower = nil
         end
         paint()
         setStatus(labelText .. (State[key] and " enabled" or " disabled"))
