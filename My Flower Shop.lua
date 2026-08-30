@@ -4,6 +4,7 @@ local CollectionService = game:GetService("CollectionService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
+local RunService = game:GetService("RunService")
 
 local Player = Players.LocalPlayer
 local Knit = require(ReplicatedStorage.Packages.Knit)
@@ -47,6 +48,7 @@ local State = {
     seedName = "Auto",
     craftContainer = (PreviousState and PreviousState.craftContainer) or "Small Bouquet",
     craftAmount = math.clamp((PreviousState and PreviousState.craftAmount) or 1, 1, 10),
+    lastCraftPreset = nil,
     busy = {},
     equipmentBusy = false,
     afkConnection = nil,
@@ -57,6 +59,8 @@ local State = {
     plantDirty = true,
     harvestDirty = true,
     displayDirty = true,
+    frameTime = 1 / 60,
+    harvestWorkers = 28,
     connections = {},
     watchedPlanters = setmetatable({}, {__mode = "k"}),
     watchedDisplays = setmetatable({}, {__mode = "k"}),
@@ -204,11 +208,22 @@ local function bestSeed()
 end
 
 local function firstFlower()
+    local bestTool, bestName, bestCount = nil, nil, 0
+    local totals = {}
+    local tools = {}
     for _, tool in ipairs(containersForTools()) do
         if isFlowerTool(tool) and not tool:GetAttribute("IsArrangement") then
-            return tool
+            local name = tool.Name
+            totals[name] = (totals[name] or 0) + (tool:GetAttribute("Count") or 1)
+            tools[name] = tools[name] or tool
         end
     end
+    for name, count in pairs(totals) do
+        if count > bestCount then
+            bestTool, bestName, bestCount = tools[name], name, count
+        end
+    end
+    return bestTool, bestName, bestCount
 end
 
 local function firstArrangement()
@@ -243,6 +258,10 @@ local function trackConnection(connection)
     State.connections[#State.connections + 1] = connection
     return connection
 end
+
+trackConnection(RunService.RenderStepped:Connect(function(deltaTime)
+    State.frameTime = State.frameTime * 0.9 + math.clamp(deltaTime, 1 / 240, 0.25) * 0.1
+end))
 
 local function watchPlanter(planter)
     if State.watchedPlanters[planter] then
@@ -514,19 +533,34 @@ local function harvestCycle()
             setStatus("Harvest waiting: nothing ready")
             return
         end
-        parallelEach(candidates, 256, function(target)
-            if not State.autoHarvest then
-                return
+        local cursor = 1
+        while cursor <= #candidates and State.autoHarvest and not State.dead do
+            local workers = 28
+            local cooldown = 0.02
+            State.harvestWorkers = workers
+
+            local batch = {}
+            local last = math.min(cursor + workers - 1, #candidates)
+            for index = cursor, last do
+                batch[#batch + 1] = candidates[index]
             end
-            local ok = serviceCall(function()
-                return GrowingService:Harvest(target.planter, target.slot)
+            cursor = last + 1
+
+            parallelEach(batch, workers, function(target)
+                if not State.autoHarvest then
+                    return
+                end
+                local ok = serviceCall(function()
+                    return GrowingService:Harvest(target.planter, target.slot)
+                end)
+                if ok then
+                    harvested += 1
+                end
             end)
-            if ok then
-                harvested += 1
-            end
-        end)
+            task.wait(cooldown)
+        end
         if harvested > 0 then
-            setStatus("Ultra Harvest: " .. harvested .. " flowers")
+            setStatus(string.format("Smooth Harvest: %d flowers (%d workers)", harvested, State.harvestWorkers))
         end
     end)
 end
@@ -707,16 +741,16 @@ local function craftCycle()
             end)
         end
 
-        local flower = firstFlower()
+        local flower, flowerName, haveCount = firstFlower()
         if not flower then
             return
         end
 
-        local flowerName = flower.Name
-        local haveCount = flowerCountByName(flowerName)
-        local requiredCount = State.craftAmount
-        if haveCount < requiredCount then
-            setStatus(string.format("Craft waiting: %d/%d %s collected", haveCount, requiredCount, flowerName))
+        local containerConfig = MenuConfig.Containers and MenuConfig.Containers[State.craftContainer]
+        local flowersPerArrangement = math.max((containerConfig and containerConfig.maxFlowers) or 1, 1)
+        local batchAmount = math.min(State.craftAmount, math.floor(haveCount / flowersPerArrangement))
+        if batchAmount < 1 then
+            setStatus(string.format("Craft waiting: %d/%d %s for full %s", haveCount, flowersPerArrangement, flowerName, State.craftContainer))
             return
         end
 
@@ -727,29 +761,40 @@ local function craftCycle()
             setStatus("Craft wait: " .. tostring(startMessage))
             return
         end
-        local reserved, reserveMessage = serviceCall(function()
-            return ArrangementService:ReserveFlower(flowerName)
-        end)
-        if not reserved then
-            serviceCall(function()
-                return ArrangementService:CancelArranging()
-            end)
-            setStatus("Craft reserve failed: " .. tostring(reserveMessage))
-            return
-        end
-
         local recipe = {
             container = State.craftContainer,
-            flowers = {flowerName},
+            flowers = {},
         }
+        local presets = MenuConfig.GetPresets(State.craftContainer)
+        if type(presets) == "table" and #presets > 0 then
+            recipe.preset = presets[math.random(1, #presets)]
+            State.lastCraftPreset = recipe.preset
+        else
+            State.lastCraftPreset = nil
+        end
+        for _ = 1, flowersPerArrangement do
+            local reserved, reserveMessage = serviceCall(function()
+                return ArrangementService:ReserveFlower(flowerName)
+            end)
+            if not reserved then
+                serviceCall(function()
+                    return ArrangementService:CancelArranging()
+                end)
+                setStatus("Craft reserve failed: " .. tostring(reserveMessage))
+                return
+            end
+            recipe.flowers[#recipe.flowers + 1] = flowerName
+        end
+
         local finished, finishMessage = serviceCall(function()
-            if State.craftAmount > 1 then
-                return ArrangementService:FinishBatchArranging(recipe, State.craftAmount)
+            if batchAmount > 1 then
+                return ArrangementService:FinishBatchArranging(recipe, batchAmount)
             end
             return ArrangementService:FinishArranging(recipe)
         end)
         if finished then
-            setStatus(string.format("Crafting %dx %s", State.craftAmount, State.craftContainer))
+            local presetText = State.lastCraftPreset and (" | " .. State.lastCraftPreset) or ""
+            setStatus(string.format("Crafting %dx %s (%d flowers each)%s", batchAmount, State.craftContainer, flowersPerArrangement, presetText))
         else
             serviceCall(function()
                 return ArrangementService:CancelArranging()
@@ -1200,7 +1245,7 @@ local function createToggle(labelText, detailText, key, order)
 end
 
 createToggle("Auto Plant", "Direct slots: 128 parallel workers", "autoPlant", 1)
-createToggle("Auto Harvest", "Direct slots: 256 parallel workers", "autoHarvest", 2)
+createToggle("Auto Harvest", "28 parallel harvests (~20 FPS)", "autoHarvest", 2)
 createToggle("Auto Craft", "1x Small Bouquet per batch", "autoCraft", 3)
 createToggle("Auto Display", "Bulk only; measured 0.02s settle tick", "autoDisplay", 4)
 createToggle("Auto Checkout", "Serves Register Checkout prompts only", "autoCheckout", 5)
@@ -1311,18 +1356,22 @@ end
 
 task.spawn(function()
     while not State.dead do
-        local stats = planterStats()
-        local displays, stocked = displayStats()
-        local _, seedType, seedCount = bestSeed()
-        State.seedName = seedType or "No seeds"
-        plantedValue.Text = string.format("%d/%d", stats.planted, stats.total)
-        freeValue.Text = tostring(stats.free)
-        readyValue.Text = tostring(stats.ready)
-        freeValue.TextColor3 = stats.free > 0 and COLORS.accent or COLORS.muted
-        readyValue.TextColor3 = stats.ready > 0 and COLORS.warning or COLORS.text
-        seedLabel.Text = string.format("Seed: %s  |  x%d  |  Displays: %d stocked / %d shelves", State.seedName, seedCount, stocked, displays)
         statusLabel.Text = State.lastAction
-        task.wait(0.25)
+        if State.busy.Harvest then
+            task.wait(0.5)
+        else
+            local stats = planterStats()
+            local displays, stocked = displayStats()
+            local _, seedType, seedCount = bestSeed()
+            State.seedName = seedType or "No seeds"
+            plantedValue.Text = string.format("%d/%d", stats.planted, stats.total)
+            freeValue.Text = tostring(stats.free)
+            readyValue.Text = tostring(stats.ready)
+            freeValue.TextColor3 = stats.free > 0 and COLORS.accent or COLORS.muted
+            readyValue.TextColor3 = stats.ready > 0 and COLORS.warning or COLORS.text
+            seedLabel.Text = string.format("Seed: %s  |  x%d  |  Displays: %d stocked / %d shelves", State.seedName, seedCount, stocked, displays)
+            task.wait(State.autoHarvest and 0.6 or 0.25)
+        end
     end
 end)
 
