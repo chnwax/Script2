@@ -1,6 +1,3 @@
--- My Flower Shop automation panel
--- All automation toggles are OFF by default.
-
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
@@ -227,6 +224,16 @@ local function arrangementCountByName(name)
     for _, tool in ipairs(containersForTools()) do
         if tool:GetAttribute("IsArrangement") and tool.Name == name then
             count += 1
+        end
+    end
+    return count
+end
+
+local function flowerCountByName(name)
+    local count = 0
+    for _, tool in ipairs(containersForTools()) do
+        if isFlowerTool(tool) and not tool:GetAttribute("IsArrangement") and tool.Name == name then
+            count += (tool:GetAttribute("Count") or 1)
         end
     end
     return count
@@ -524,6 +531,64 @@ local function harvestCycle()
     end)
 end
 
+local function promptBasePart(prompt)
+    local current = prompt and prompt.Parent
+    while current and not current:IsA("BasePart") do
+        current = current.Parent
+    end
+    return current
+end
+
+local function triggerCheckoutPrompt(prompt)
+    local character = Player.Character
+    local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+    local promptPart = promptBasePart(prompt)
+    if not character or not rootPart or not promptPart then
+        return false, "character or register part missing"
+    end
+
+    local distance = (rootPart.Position - promptPart.Position).Magnitude
+    local activationDistance = math.max(prompt.MaxActivationDistance, 1)
+    if distance <= activationDistance then
+        fireproximityprompt(prompt, 0)
+        return true, false
+    end
+
+    local originalPivot = character:GetPivot()
+    local originalLinearVelocity = rootPart.AssemblyLinearVelocity
+    local originalAngularVelocity = rootPart.AssemblyAngularVelocity
+    local camera = workspace.CurrentCamera
+    local originalCameraType = camera and camera.CameraType
+    local originalCameraCFrame = camera and camera.CFrame
+    local moved = false
+
+    local ok, err = pcall(function()
+        if camera then
+            camera.CameraType = Enum.CameraType.Scriptable
+            camera.CFrame = originalCameraCFrame
+        end
+        local targetPosition = promptPart.Position + Vector3.new(0, 3, 0)
+        character:PivotTo(CFrame.new(targetPosition) * originalPivot.Rotation)
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+        rootPart.AssemblyAngularVelocity = Vector3.zero
+        moved = true
+        task.wait(0.15)
+        fireproximityprompt(prompt, 0)
+        task.wait(0.12)
+    end)
+
+    if moved and character.Parent and rootPart.Parent then
+        character:PivotTo(originalPivot)
+        rootPart.AssemblyLinearVelocity = originalLinearVelocity
+        rootPart.AssemblyAngularVelocity = originalAngularVelocity
+    end
+    if camera then
+        camera.CameraType = originalCameraType
+        camera.CFrame = originalCameraCFrame
+    end
+    return ok, ok and true or tostring(err)
+end
+
 local function checkoutCycle()
     runExclusive("Checkout", function()
         local plot = ownPlot()
@@ -552,8 +617,12 @@ local function checkoutCycle()
         end
         State.lastCheckoutPrompt = prompt
         State.lastCheckoutAt = os.clock()
-        fireproximityprompt(prompt, 0)
-        setStatus("Checkout: " .. tostring(prompt.ObjectText or "customer served"))
+        local ok, remote = triggerCheckoutPrompt(prompt)
+        if ok then
+            setStatus((remote and "Remote Checkout: " or "Checkout: ") .. tostring(prompt.ObjectText or "customer served"))
+        else
+            setStatus("Checkout failed: " .. tostring(remote))
+        end
     end)
 end
 
@@ -643,6 +712,14 @@ local function craftCycle()
             return
         end
 
+        local flowerName = flower.Name
+        local haveCount = flowerCountByName(flowerName)
+        local requiredCount = State.craftAmount
+        if haveCount < requiredCount then
+            setStatus(string.format("Craft waiting: %d/%d %s collected", haveCount, requiredCount, flowerName))
+            return
+        end
+
         local started, startMessage = serviceCall(function()
             return ArrangementService:StartArranging(tableObject)
         end)
@@ -650,8 +727,6 @@ local function craftCycle()
             setStatus("Craft wait: " .. tostring(startMessage))
             return
         end
-
-        local flowerName = flower.Name
         local reserved, reserveMessage = serviceCall(function()
             return ArrangementService:ReserveFlower(flowerName)
         end)
@@ -708,8 +783,8 @@ State.gui = gui
 
 local root = Instance.new("Frame")
 root.Name = "Panel"
-root.AnchorPoint = Vector2.new(0.5, 0.5)
-root.Position = UDim2.fromScale(0.78, 0.5)
+root.AnchorPoint = Vector2.new(0.5, 0)
+root.Position = UDim2.new(0.78, 0, 0, 18)
 root.Size = UDim2.fromOffset(380, 666)
 root.BackgroundColor3 = COLORS.background
 root.BorderSizePixel = 0
