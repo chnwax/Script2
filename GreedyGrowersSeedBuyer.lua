@@ -4,13 +4,19 @@
 local env = getgenv()
 local previous = env.GreedyGrowersSeedBuyer
 local previousSelected = {}
+local previousCompostSelected = {}
 local previousProcessed = {}
 local previousMaxPrice = math.huge
 local previousAutoBuy = false
+local previousAutoCompost = false
 local previousAntiAfk = true
+local previousFilterMode = "BUY"
 if previous then
     for seedType, selected in pairs(previous.selected or {}) do
         previousSelected[seedType] = selected == true
+    end
+    for seedType, selected in pairs(previous.compostSelected or {}) do
+        previousCompostSelected[seedType] = selected == true
     end
     for spawnId, processed in pairs(previous.processed or {}) do
         if processed then
@@ -19,7 +25,11 @@ if previous then
     end
     previousMaxPrice = previous.maxPrice or math.huge
     previousAutoBuy = previous.autoBuy == true
+    previousAutoCompost = previous.autoCompost == true
     previousAntiAfk = previous.antiAfk ~= false
+    if previous.filterMode == "COMPOST" then
+        previousFilterMode = "COMPOST"
+    end
     previous.shutdown = true
     if previous.connections then
         for _, connection in ipairs(previous.connections) do
@@ -40,6 +50,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local VirtualUser = game:GetService("VirtualUser")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -47,14 +58,22 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local State = {
     shutdown = false,
     autoBuy = previousAutoBuy,
+    autoCompost = previousAutoCompost,
     antiAfk = previousAntiAfk,
     minimized = false,
     busy = false,
+    compostBusy = false,
     maxPrice = previousMaxPrice,
     selected = {},
+    compostSelected = {},
+    filterMode = previousFilterMode,
     processed = previousProcessed,
     bought = 0,
     failed = 0,
+    composted = 0,
+    collected = 0,
+    nextBuyAt = 0,
+    nextCollectAt = 0,
     antiAfkPulses = 0,
     antiAfkLastPulse = 0,
     lastAttempt = {},
@@ -64,6 +83,14 @@ env.GreedyGrowersSeedBuyer = State
 
 local SeedConfig = require(ReplicatedStorage.Shared.Info.SeedConfig)
 local Conveyor = workspace:WaitForChild("BigField"):WaitForChild("ConveyorSeeds")
+local ToolToggleRemote = ReplicatedStorage:WaitForChild("Packages")
+    :WaitForChild("_Index")
+    :WaitForChild("sleitnick_knit@1.6.0")
+    :WaitForChild("knit")
+    :WaitForChild("Services")
+    :WaitForChild("ToolService")
+    :WaitForChild("RE")
+    :WaitForChild("ToggleEquip")
 
 local function findPurchaseRemote()
     local packages = ReplicatedStorage:WaitForChild("Packages")
@@ -144,6 +171,7 @@ for key, info in pairs(SeedConfig.Seeds) do
         else
             State.selected[tostring(key)] = true
         end
+        State.compostSelected[tostring(key)] = previousCompostSelected[tostring(key)] == true
     end
 end
 
@@ -375,6 +403,9 @@ local function createToggle(parent, x, width, labelText)
     local label = makeText(button, labelText, 12, Color3.fromRGB(211, 226, 217), Enum.Font.GothamSemibold)
     label.Position = UDim2.fromOffset(13, 0)
     label.Size = UDim2.new(1, -66, 1, 0)
+    if width < 150 then
+        label.TextSize = 10
+    end
 
     local track = Instance.new("Frame")
     track.AnchorPoint = Vector2.new(1, 0.5)
@@ -406,14 +437,38 @@ local function createToggle(parent, x, width, labelText)
     return button, render
 end
 
-local AutoButton, renderAuto = createToggle(Body, 14, 190, "AUTO BUY")
-local AfkButton, renderAfk = createToggle(Body, 216, 190, "ANTI-AFK")
+local AutoButton, renderAuto = createToggle(Body, 14, 124, "AUTO BUY")
+local CompostButton, renderCompost = createToggle(Body, 148, 124, "COMPOST")
+local AfkButton, renderAfk = createToggle(Body, 282, 124, "ANTI-AFK")
 renderAuto(State.autoBuy)
+renderCompost(State.autoCompost)
 renderAfk(State.antiAfk)
 
-local FilterTitle = makeText(Body, "SEED FILTERS", 11, Color3.fromRGB(132, 161, 144), Enum.Font.GothamBold)
+local FilterTitle = makeText(Body, "EDIT BUY LIST", 11, Color3.fromRGB(132, 161, 144), Enum.Font.GothamBold)
 FilterTitle.Position = UDim2.fromOffset(15, 151)
-FilterTitle.Size = UDim2.fromOffset(120, 20)
+FilterTitle.Size = UDim2.fromOffset(110, 20)
+
+local BuyFilterTab = Instance.new("TextButton")
+BuyFilterTab.Position = UDim2.fromOffset(216, 146)
+BuyFilterTab.Size = UDim2.fromOffset(88, 25)
+BuyFilterTab.BackgroundColor3 = Color3.fromRGB(45, 112, 67)
+BuyFilterTab.BorderSizePixel = 0
+BuyFilterTab.Text = "BUY LIST"
+BuyFilterTab.TextColor3 = Color3.fromRGB(221, 249, 230)
+BuyFilterTab.TextSize = 10
+BuyFilterTab.Font = Enum.Font.GothamBold
+BuyFilterTab.AutoButtonColor = false
+BuyFilterTab.Parent = Body
+addCorner(BuyFilterTab, 7)
+
+local CompostFilterTab = BuyFilterTab:Clone()
+CompostFilterTab.Position = UDim2.fromOffset(312, 146)
+CompostFilterTab.Size = UDim2.fromOffset(94, 25)
+CompostFilterTab.BackgroundColor3 = Color3.fromRGB(30, 43, 36)
+CompostFilterTab.Text = "COMPOST LIST"
+CompostFilterTab.TextSize = 9
+CompostFilterTab.TextColor3 = Color3.fromRGB(132, 156, 142)
+CompostFilterTab.Parent = Body
 
 local Search = Instance.new("TextBox")
 Search.Position = UDim2.fromOffset(14, 176)
@@ -500,7 +555,8 @@ local seedRows = {}
 
 local function selectedTotal()
     local count = 0
-    for _, enabled in pairs(State.selected) do
+    local source = State.filterMode == "COMPOST" and State.compostSelected or State.selected
+    for _, enabled in pairs(source) do
         if enabled then
             count = count + 1
         end
@@ -509,7 +565,8 @@ local function selectedTotal()
 end
 
 local function renderSelectedCount()
-    SelectedCount.Text = tostring(selectedTotal()) .. " selected"
+    local prefix = State.filterMode == "COMPOST" and "COMPOST: " or "BUY: "
+    SelectedCount.Text = prefix .. tostring(selectedTotal()) .. " selected"
 end
 
 local function renderSeedRow(seed)
@@ -517,12 +574,27 @@ local function renderSeedRow(seed)
     if not row then
         return
     end
-    local enabled = State.selected[seed.key] == true
+    local buyEnabled = State.selected[seed.key] == true
+    local compostEnabled = State.compostSelected[seed.key] == true
+    local compostMode = State.filterMode == "COMPOST"
+    local enabled
+    if compostMode then
+        enabled = compostEnabled
+    else
+        enabled = buyEnabled
+    end
+    local selectedRow = compostMode and Color3.fromRGB(55, 40, 24) or Color3.fromRGB(27, 49, 37)
+    local selectedStroke = compostMode and Color3.fromRGB(225, 139, 49) or Color3.fromRGB(62, 143, 88)
+    local selectedCheck = compostMode and Color3.fromRGB(244, 159, 62) or Color3.fromRGB(65, 213, 115)
+    local selectedText = compostMode and Color3.fromRGB(58, 32, 10) or Color3.fromRGB(12, 38, 22)
+    row.button:SetAttribute("BuySelected", buyEnabled)
+    row.button:SetAttribute("CompostSelected", compostEnabled)
     row.button:SetAttribute("Selected", enabled)
-    row.button.BackgroundColor3 = enabled and Color3.fromRGB(27, 49, 37) or Color3.fromRGB(24, 31, 27)
-    row.stroke.Color = enabled and Color3.fromRGB(62, 143, 88) or Color3.fromRGB(48, 61, 53)
-    row.check.BackgroundColor3 = enabled and Color3.fromRGB(65, 213, 115) or Color3.fromRGB(52, 61, 56)
-    row.check.Text = enabled and "✓" or ""
+    row.button.BackgroundColor3 = enabled and selectedRow or Color3.fromRGB(24, 31, 27)
+    row.stroke.Color = enabled and selectedStroke or Color3.fromRGB(48, 61, 53)
+    row.check.BackgroundColor3 = enabled and selectedCheck or Color3.fromRGB(42, 49, 45)
+    row.check.TextColor3 = enabled and selectedText or (compostMode and Color3.fromRGB(184, 111, 45) or Color3.fromRGB(80, 121, 94))
+    row.check.Text = compostMode and "C" or "B"
 end
 
 for index, seed in ipairs(seeds) do
@@ -534,7 +606,8 @@ for index, seed in ipairs(seeds) do
     Row.Text = ""
     Row.AutoButtonColor = false
     Row.LayoutOrder = index
-    Row:SetAttribute("Selected", true)
+    Row:SetAttribute("BuySelected", State.selected[seed.key] == true)
+    Row:SetAttribute("CompostSelected", State.compostSelected[seed.key] == true)
     Row.Parent = List
     addCorner(Row, 9)
     local rowStroke = addStroke(Row, Color3.fromRGB(62, 143, 88), 1, 0.35)
@@ -574,11 +647,43 @@ for index, seed in ipairs(seeds) do
     renderSeedRow(seed)
 
     State.connections[#State.connections + 1] = Row.Activated:Connect(function()
-        State.selected[seed.key] = not (Row:GetAttribute("Selected") == true)
+        if State.filterMode == "COMPOST" then
+            State.compostSelected[seed.key] = not (Row:GetAttribute("CompostSelected") == true)
+        else
+            State.selected[seed.key] = not (Row:GetAttribute("BuySelected") == true)
+        end
         renderSeedRow(seed)
         renderSelectedCount()
     end)
 end
+
+local function renderFilterMode()
+    local compostMode = State.filterMode == "COMPOST"
+    BuyFilterTab.BackgroundColor3 = compostMode and Color3.fromRGB(30, 43, 36) or Color3.fromRGB(45, 112, 67)
+    BuyFilterTab.TextColor3 = compostMode and Color3.fromRGB(132, 156, 142) or Color3.fromRGB(221, 249, 230)
+    CompostFilterTab.BackgroundColor3 = compostMode and Color3.fromRGB(151, 83, 30) or Color3.fromRGB(30, 43, 36)
+    CompostFilterTab.TextColor3 = compostMode and Color3.fromRGB(255, 231, 201) or Color3.fromRGB(156, 130, 104)
+    FilterTitle.Text = compostMode and "EDIT COMPOST LIST" or "EDIT BUY LIST"
+    FilterTitle.TextColor3 = compostMode and Color3.fromRGB(226, 151, 78) or Color3.fromRGB(132, 161, 144)
+    for _, seed in ipairs(seeds) do
+        renderSeedRow(seed)
+    end
+    renderSelectedCount()
+end
+
+local function setFilterMode(mode)
+    State.filterMode = mode == "COMPOST" and "COMPOST" or "BUY"
+    renderFilterMode()
+end
+State.setFilterMode = setFilterMode
+
+State.connections[#State.connections + 1] = BuyFilterTab.Activated:Connect(function()
+    setFilterMode("BUY")
+end)
+
+State.connections[#State.connections + 1] = CompostFilterTab.Activated:Connect(function()
+    setFilterMode("COMPOST")
+end)
 
 local LastAction = makeText(Body, "Ready - waiting for matching seeds", 10, Color3.fromRGB(123, 149, 134), Enum.Font.GothamMedium)
 LastAction.Position = UDim2.fromOffset(16, 477)
@@ -605,8 +710,9 @@ local function applySearch()
 end
 
 local function setAll(value)
+    local target = State.filterMode == "COMPOST" and State.compostSelected or State.selected
     for _, seed in ipairs(seeds) do
-        State.selected[seed.key] = value
+        target[seed.key] = value
         renderSeedRow(seed)
     end
     renderSelectedCount()
@@ -624,14 +730,27 @@ local function getHolderInfo(holder)
     return spawnId, tostring(seedType), tostring(holder:GetAttribute("Rarity") or "")
 end
 
-local function matchesHolder(holder)
-    local spawnId, seedType = getHolderInfo(holder)
+local function seedIsEnabled(seedType)
     local row = seedRows[seedType]
-    local selected = row and row.button:GetAttribute("Selected")
+    local selected = row and row.button:GetAttribute("BuySelected")
     if selected == nil then
         selected = State.selected[seedType]
     end
-    if not spawnId or State.processed[spawnId] or selected ~= true then
+    return selected == true
+end
+
+local function compostSeedIsEnabled(seedType)
+    local row = seedRows[seedType]
+    local selected = row and row.button:GetAttribute("CompostSelected")
+    if selected == nil then
+        selected = State.compostSelected[seedType]
+    end
+    return selected == true
+end
+
+local function matchesHolder(holder)
+    local spawnId, seedType = getHolderInfo(holder)
+    if not spawnId or State.processed[spawnId] or not seedIsEnabled(seedType) then
         return false
     end
     local info = seedByKey[seedType]
@@ -644,7 +763,8 @@ local function beltCounts()
     for _, child in ipairs(Conveyor:GetChildren()) do
         if child:GetAttribute("SpawnId") then
             total = total + 1
-            if matchesHolder(child) then
+            local _, seedType = getHolderInfo(child)
+            if matchesHolder(child) and (not State.autoCompost or compostSeedIsEnabled(seedType)) then
                 matching = matching + 1
             end
         end
@@ -652,15 +772,259 @@ local function beltCounts()
     return total, matching
 end
 
+local function getOwnCompost()
+    local plots = workspace:FindFirstChild("BigField") and workspace.BigField:FindFirstChild("PlayerPlots")
+    if not plots then
+        return nil
+    end
+
+    for _, plot in ipairs(plots:GetChildren()) do
+        if plot:GetAttribute("OwnerUserId") == LocalPlayer.UserId then
+            local bin = plot:FindFirstChild("CompostBin")
+            local promptPart = bin and bin:FindFirstChild("PromptPart")
+            local prompt = promptPart and promptPart:FindFirstChild("CompostPrompt")
+            local amount = promptPart and promptPart:FindFirstChild("Amount")
+            local frame = amount and amount:FindFirstChild("Frame")
+            local label = frame and frame:FindFirstChild("Identifier")
+            if prompt and label then
+                return promptPart, prompt, label
+            end
+        end
+    end
+end
+
+local function getCompostProgress()
+    local _, _, label = getOwnCompost()
+    if not label then
+        return 0, 100, "0/100"
+    end
+    local current, maximum = string.match(label.Text, "(%d+)%s*/%s*(%d+)")
+    return tonumber(current) or 0, tonumber(maximum) or 100, label.Text
+end
+
+local function seedKeyFromToolName(toolName)
+    local lowered = string.lower(tostring(toolName or ""))
+    for _, seed in ipairs(seeds) do
+        if string.find(lowered, string.lower(seed.name), 1, true) then
+            return seed.key
+        end
+    end
+end
+
+local function hotbarSlots()
+    local hud = PlayerGui:FindFirstChild("HUD")
+    local hotbar = hud and hud:FindFirstChild("Hotbar")
+    local lower = hotbar and hotbar:FindFirstChild("LowerSection")
+    return lower and lower:FindFirstChild("LowerHotbarSlots")
+end
+
+local function findCompostableHotbarSeed()
+    local slots = hotbarSlots()
+    if not slots then
+        return nil
+    end
+
+    for _, holder in ipairs(slots:GetChildren()) do
+        if holder:IsA("GuiObject") and holder.Visible then
+            local button = holder:FindFirstChild("Slot")
+            local toolName = button and button:FindFirstChild("ToolName")
+            local seedType = toolName and seedKeyFromToolName(toolName.Text)
+            if seedType and compostSeedIsEnabled(seedType) then
+                return button, seedType, toolName.Text
+            end
+        end
+    end
+end
+
+local function findCompostableStorageSeed()
+    local hud = PlayerGui:FindFirstChild("HUD")
+    local hotbar = hud and hud:FindFirstChild("Hotbar")
+    if not hotbar then
+        return nil
+    end
+
+    for _, button in ipairs(hotbar:GetDescendants()) do
+        if button:IsA("GuiButton") and button:GetAttribute("Hotbar") == false then
+            local toolName = button:FindFirstChild("ToolName")
+            local seedType = toolName and seedKeyFromToolName(toolName.Text)
+            local slotNumber = tonumber(button:GetAttribute("SlotNum"))
+            if slotNumber and seedType and compostSeedIsEnabled(seedType) then
+                return slotNumber, seedType, toolName.Text
+            end
+        end
+    end
+end
+
+local function equipStorageSeed(slotNumber)
+    if not slotNumber then
+        return false
+    end
+    return pcall(function()
+        ToolToggleRemote:FireServer(false, slotNumber)
+    end)
+end
+
+local function hotbarHasFreeSlot()
+    local slots = hotbarSlots()
+    if not slots then
+        return false
+    end
+    for _, holder in ipairs(slots:GetChildren()) do
+        if holder:IsA("GuiObject") and not holder.Visible then
+            return true
+        end
+    end
+    return false
+end
+
+local function hotbarButtonSelected(button)
+    for _, item in ipairs(button:GetDescendants()) do
+        if item:IsA("UIStroke") and item.Enabled and item.Color == Color3.new(1, 1, 1) then
+            return true
+        end
+    end
+    return false
+end
+
+local function clickHotbarButton(button)
+    if not button or not button.Parent or not button.Visible then
+        return false
+    end
+
+    local keyBySlot = {
+        [1] = Enum.KeyCode.One,
+        [2] = Enum.KeyCode.Two,
+        [3] = Enum.KeyCode.Three,
+        [4] = Enum.KeyCode.Four,
+        [5] = Enum.KeyCode.Five,
+        [6] = Enum.KeyCode.Six,
+        [7] = Enum.KeyCode.Seven,
+        [8] = Enum.KeyCode.Eight,
+        [9] = Enum.KeyCode.Nine,
+        [10] = Enum.KeyCode.Zero,
+    }
+    local slotNumber = tonumber(button:GetAttribute("SlotNum"))
+    local keyCode = keyBySlot[slotNumber]
+    if keyCode then
+        local keyOk = pcall(function()
+            VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+            task.wait(0.04)
+            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+        end)
+        if keyOk then
+            return true
+        end
+    end
+
+    local position = button.AbsolutePosition + button.AbsoluteSize / 2
+    return pcall(function()
+        VirtualInputManager:SendMouseMoveEvent(position.X, position.Y, game)
+        task.wait(0.03)
+        VirtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, true, game, 0)
+        task.wait(0.06)
+        VirtualInputManager:SendMouseButtonEvent(position.X, position.Y, 0, false, game, 0)
+    end)
+end
+
+local function triggerCompostPrompt()
+    local promptPart, prompt = getOwnCompost()
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not promptPart or not prompt or not root then
+        return false
+    end
+
+    local original = root.CFrame
+    local ok = pcall(function()
+        root.CFrame = promptPart.CFrame * CFrame.new(0, 0, -4)
+        task.wait(0.3)
+        fireproximityprompt(prompt, 0, true)
+        task.wait(0.85)
+    end)
+    pcall(function()
+        if root.Parent then
+            root.CFrame = original
+        end
+    end)
+    return ok
+end
+
+local function runCompostStep()
+    if State.compostBusy or not State.autoCompost then
+        return
+    end
+
+    local current, maximum = getCompostProgress()
+    if current >= maximum then
+        if os.clock() < State.nextCollectAt then
+            return
+        end
+        State.compostBusy = true
+        State.nextCollectAt = os.clock() + 2
+        LastAction.Text = "Collecting finished compost..."
+        local triggered = triggerCompostPrompt()
+        local after = getCompostProgress()
+        if triggered and after < current then
+            State.collected = State.collected + 1
+            LastAction.Text = "Compost collected - starting next batch"
+        else
+            LastAction.Text = "Compost 100/100 - waiting for Collect"
+        end
+        State.compostBusy = false
+        return
+    end
+
+    local button, _, toolName = findCompostableHotbarSeed()
+    local storageSlot
+    if not button then
+        storageSlot, _, toolName = findCompostableStorageSeed()
+    end
+    if not button and not storageSlot then
+        return
+    end
+
+    State.compostBusy = true
+    if storageSlot then
+        equipStorageSeed(storageSlot)
+        task.wait(0.28)
+    elseif not hotbarButtonSelected(button) then
+        clickHotbarButton(button)
+        task.wait(0.18)
+    end
+
+    local before = getCompostProgress()
+    LastAction.Text = "Adding " .. tostring(toolName) .. " to compost..."
+    local triggered = triggerCompostPrompt()
+    local after = getCompostProgress()
+    if triggered and after > before then
+        State.composted = State.composted + (after - before)
+        LastAction.Text = string.format("Compost: %d/%d", after, maximum)
+    else
+        LastAction.Text = "Could not add seed - waiting"
+    end
+    State.compostBusy = false
+end
+
 local function updateStatus()
     if State.shutdown then
         return
     end
     local total, matching = beltCounts()
-    Counters.Text = string.format("On belt: %d   Matching: %d   Bought: %d", total, matching, State.bought)
-    if State.autoBuy then
-        StatusDot.BackgroundColor3 = State.busy and Color3.fromRGB(255, 194, 76) or Color3.fromRGB(75, 229, 124)
-        StatusLabel.Text = State.busy and "BUYING SEED..." or "AUTO BUY ACTIVE"
+    local compostCurrent, compostMaximum = getCompostProgress()
+    Counters.Text = string.format("Belt: %d   Match: %d   Bought: %d   Compost: %d/%d", total, matching, State.bought, compostCurrent, compostMaximum)
+    if State.autoBuy or State.autoCompost then
+        StatusDot.BackgroundColor3 = (State.busy or State.compostBusy) and Color3.fromRGB(255, 194, 76) or Color3.fromRGB(75, 229, 124)
+        if State.busy then
+            StatusLabel.Text = "BUYING SEED..."
+        elseif State.compostBusy then
+            StatusLabel.Text = "USING COMPOSTER..."
+        elseif State.autoBuy and State.autoCompost then
+            StatusLabel.Text = "BUY + COMPOST ACTIVE"
+        elseif State.autoCompost then
+            StatusLabel.Text = "AUTO COMPOST ACTIVE"
+        else
+            StatusLabel.Text = "AUTO BUY ACTIVE"
+        end
         StatusLabel.TextColor3 = Color3.fromRGB(185, 244, 205)
     else
         StatusDot.BackgroundColor3 = Color3.fromRGB(112, 125, 118)
@@ -673,6 +1037,13 @@ State.connections[#State.connections + 1] = AutoButton.Activated:Connect(functio
     State.autoBuy = not State.autoBuy
     renderAuto(State.autoBuy)
     LastAction.Text = State.autoBuy and "Watching the conveyor..." or "Auto Buy paused"
+    updateStatus()
+end)
+
+State.connections[#State.connections + 1] = CompostButton.Activated:Connect(function()
+    State.autoCompost = not State.autoCompost
+    renderCompost(State.autoCompost)
+    LastAction.Text = State.autoCompost and "Auto Compost watching selected seeds..." or "Auto Compost paused"
     updateStatus()
 end)
 
@@ -807,7 +1178,21 @@ task.spawn(function()
     while not State.shutdown do
         updateStatus()
 
-        if State.autoBuy and not State.busy then
+        local compostReadyForBuy = true
+        if State.autoCompost then
+            local compostCurrent, compostMaximum = getCompostProgress()
+            compostReadyForBuy = compostCurrent < compostMaximum
+                and findCompostableHotbarSeed() == nil
+                and findCompostableStorageSeed() == nil
+                and hotbarHasFreeSlot()
+        end
+
+        if State.autoBuy
+            and not State.busy
+            and not State.compostBusy
+            and compostReadyForBuy
+            and os.clock() >= State.nextBuyAt
+        then
             local now = os.clock()
             local candidate
             local candidateId
@@ -815,7 +1200,10 @@ task.spawn(function()
 
             for _, holder in ipairs(Conveyor:GetChildren()) do
                 local spawnId, seedType = getHolderInfo(holder)
-                if spawnId and matchesHolder(holder) then
+                if spawnId
+                    and matchesHolder(holder)
+                    and (not State.autoCompost or compostSeedIsEnabled(seedType))
+                then
                     candidate = holder
                     candidateId = spawnId
                     candidateType = seedType
@@ -839,6 +1227,7 @@ task.spawn(function()
 
                 if ok and accepted == true then
                     State.bought = State.bought + 1
+                    State.nextBuyAt = os.clock() + (State.autoCompost and 0.8 or 0.05)
                     LastAction.Text = "Bought " .. (seedByKey[candidateType] and seedByKey[candidateType].name or candidateType)
                 else
                     State.failed = State.failed + 1
@@ -852,7 +1241,16 @@ task.spawn(function()
     end
 end)
 
-renderSelectedCount()
+task.spawn(function()
+    while not State.shutdown do
+        if State.autoCompost and not State.busy then
+            runCompostStep()
+        end
+        task.wait(State.autoCompost and 0.12 or 0.3)
+    end
+end)
+
+setFilterMode(State.filterMode)
 applySearch()
 updateStatus()
-print("[GreedyGrowers] Seed Buyer loaded - direct conveyor purchase ready")
+print("[GreedyGrowers] Seed Buyer + Auto Compost loaded")
