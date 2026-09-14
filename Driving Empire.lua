@@ -1,5 +1,7 @@
--- DELIVERY LOOP  (Driving Empire)  +settable dropoff delay +anti-afk(VIM)
+-- DELIVERY LOOP  (Driving Empire)  +settable dropoff delay +anti-afk(VIM) +auto-open tuning kits
 -- pickup: hold at package centroid until all collected; dropoff: wait N s then tp+slide
+-- anti-afk: game teleports to AFK room when (now-lastInput) >= TeleportIdleTime; VIM key fires
+--           UserInputService.InputBegan which resets that timer. Pulse < threshold (12s).
 local Players=game:GetService("Players")
 local UIS=game:GetService("UserInputService")
 local plr=Players.LocalPlayer
@@ -7,6 +9,7 @@ local plr=Players.LocalPlayer
 getgenv().DEL=getgenv().DEL or {on=false}
 local DEL=getgenv().DEL
 if DEL.dropDelay==nil then DEL.dropDelay=3 end
+if DEL.autoOpen==nil then DEL.autoOpen=false end
 getgenv().__delTok=(getgenv().__delTok or 0)+1
 local myTok=getgenv().__delTok
 pcall(function() local g=game:GetService("CoreGui"):FindFirstChild("DelGui"); if g then g:Destroy() end end)
@@ -18,14 +21,15 @@ if not getgenv().__delAfk then
     local VIM=game:GetService("VirtualInputManager")
     local VU=game:GetService("VirtualUser")
     while getgenv().__delAfk do
-      -- F13 = unbound key, resets Roblox idle timer, no gameplay effect
+      -- F13 = unbound key; SendKeyEvent fires UIS.InputBegan -> resets game AFK-room timer
+      -- (also resets Roblox 20min idle kick). 12s < game TeleportIdleTime threshold.
       pcall(function()
         VIM:SendKeyEvent(true, Enum.KeyCode.F13, false, game)
         task.wait(0.1)
         VIM:SendKeyEvent(false, Enum.KeyCode.F13, false, game)
       end)
       pcall(function() VU:CaptureController(); VU:ClickButton2(Vector2.new()) end)
-      task.wait(60)
+      task.wait(12)
     end
   end)
   plr.Idled:Connect(function()
@@ -174,10 +178,59 @@ task.spawn(function()
   end
 end)
 
+-- ===== AUTO-OPEN TUNING KITS (fast) =====
+-- open flow (from GachaController): Remotes.OpenGacha:InvokeServer(packId,{Amount=n})
+--   returns (success, rewardData). We call the RemoteFunction raw -> no cutscene = fast.
+-- owned kits: replicated JSON at PlayerGui["<name>'s Stats"].Gacha.PackInventory = {packId={Amount=n}}
+local HttpService=game:GetService("HttpService")
+local function ownedPacks()
+  local pg=plr:FindFirstChild("PlayerGui"); if not pg then return {} end
+  local stats=pg:FindFirstChild(plr.Name.."'s Stats"); if not stats then return {} end
+  local g=stats:FindFirstChild("Gacha"); local pinv=g and g:FindFirstChild("PackInventory")
+  if not pinv or pinv.Value=="" then return {} end
+  local ok,data=pcall(function() return HttpService:JSONDecode(pinv.Value) end)
+  if not ok or type(data)~="table" then return {} end
+  local list={}
+  for k,v in pairs(data) do
+    if type(v)=="table" then
+      local amt=tonumber(v.Amount) or 0
+      if amt>0 then list[#list+1]={id=k,amt=amt} end
+    elseif type(v)=="number" and v>0 then
+      list[#list+1]={id=k,amt=v}
+    end
+  end
+  return list
+end
+local function openRemote()
+  local r=game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+  return r and r:FindFirstChild("OpenGacha")
+end
+task.spawn(function()
+  while getgenv().__delTok==myTok do
+    if not DEL.autoOpen then task.wait(0.4); continue end
+    local rf=openRemote()
+    if not rf then task.wait(0.5); continue end
+    local packs=ownedPacks()
+    if #packs==0 then setStatus("KITS: none"); task.wait(0.6); continue end
+    for _,p in ipairs(packs) do
+      local left=p.amt
+      while left>0 and DEL.autoOpen and getgenv().__delTok==myTok do
+        local n=math.min(left,10)
+        setStatus("OPEN "..p.id.." x"..n)
+        local pok,ok1=pcall(function() return rf:InvokeServer(p.id,{Amount=n}) end)
+        if not pok or ok1==false or ok1==nil then break end
+        left=left-n
+        task.wait(0.05)
+      end
+    end
+    task.wait(0.1)
+  end
+end)
+
 -- ===== UI =====
 local CoreGui=game:GetService("CoreGui")
 local gui=Instance.new("ScreenGui"); gui.Name="DelGui"; gui.ResetOnSpawn=false; gui.Parent=CoreGui
-local f=Instance.new("Frame"); f.Size=UDim2.fromOffset(210,150); f.Position=UDim2.fromOffset(40,140)
+local f=Instance.new("Frame"); f.Size=UDim2.fromOffset(210,205); f.Position=UDim2.fromOffset(40,140)
 f.BackgroundColor3=Color3.fromRGB(22,24,30); f.BorderSizePixel=0; f.Parent=gui
 Instance.new("UICorner",f).CornerRadius=UDim.new(0,10)
 local st=Instance.new("UIStroke",f); st.Color=Color3.fromRGB(70,120,255); st.Thickness=1.5
@@ -206,8 +259,19 @@ tb.FocusLost:Connect(function()
   if v then DEL.dropDelay=math.clamp(math.floor(v),0,120) end
   tb.Text=tostring(DEL.dropDelay)
 end)
+-- auto-open tuning kits toggle
+local obtn=Instance.new("TextButton"); obtn.Size=UDim2.new(1,-20,0,34); obtn.Position=UDim2.fromOffset(10,116)
+obtn.BackgroundColor3=DEL.autoOpen and Color3.fromRGB(160,110,40) or Color3.fromRGB(45,48,60)
+obtn.Text="OPEN KITS : "..(DEL.autoOpen and "ON" or "OFF"); obtn.Font=Enum.Font.GothamBold
+obtn.TextSize=15; obtn.TextColor3=Color3.new(1,1,1); obtn.BorderSizePixel=0; obtn.Parent=f
+Instance.new("UICorner",obtn).CornerRadius=UDim.new(0,8)
+obtn.MouseButton1Click:Connect(function()
+  DEL.autoOpen=not DEL.autoOpen
+  obtn.Text="OPEN KITS : "..(DEL.autoOpen and "ON" or "OFF")
+  obtn.BackgroundColor3=DEL.autoOpen and Color3.fromRGB(160,110,40) or Color3.fromRGB(45,48,60)
+end)
 local lbl=Instance.new("TextLabel"); lbl.BackgroundTransparency=1; lbl.Size=UDim2.new(1,-20,0,22)
-lbl.Position=UDim2.fromOffset(10,118); lbl.Font=Enum.Font.Gotham; lbl.TextSize=13
+lbl.Position=UDim2.fromOffset(10,160); lbl.Font=Enum.Font.Gotham; lbl.TextSize=13
 lbl.TextColor3=Color3.fromRGB(180,185,200); lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.Text="OFF"; lbl.Parent=f
 setStatus=function(s) lbl.Text=s end
 btn.MouseButton1Click:Connect(function()
@@ -220,4 +284,4 @@ head.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.Mouse
 UIS.InputChanged:Connect(function(i) if drag and i.UserInputType==Enum.UserInputType.MouseMovement then
   local d=i.Position-ds; f.Position=UDim2.new(sp.X.Scale,sp.X.Offset+d.X,sp.Y.Scale,sp.Y.Offset+d.Y) end end)
 UIS.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end end)
-print("[DELIVERY LOOP] loaded  +dropDelay +anti-afk(VIM)")
+print("[DELIVERY LOOP] loaded  +dropDelay +anti-afk(VIM 12s) +auto-open kits")
