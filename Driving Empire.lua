@@ -180,51 +180,44 @@ task.spawn(function()
 end)
 
 -- ===== AUTO-OPEN TUNING KITS (fast) =====
--- open flow (from GachaController): Remotes.OpenGacha:InvokeServer(packId,{Amount=n})
---   returns (success, rewardData). We call the RemoteFunction raw -> no cutscene = fast.
--- owned kits: replicated JSON at PlayerGui["<name>'s Stats"].Gacha.PackInventory = {packId={Amount=n}}
-local HttpService=game:GetService("HttpService")
-local function ownedPacks()
-  local pg=plr:FindFirstChild("PlayerGui"); if not pg then return {} end
-  local stats=pg:FindFirstChild(plr.Name.."'s Stats"); if not stats then return {} end
-  local g=stats:FindFirstChild("Gacha"); local pinv=g and g:FindFirstChild("PackInventory")
-  if not pinv or pinv.Value=="" then return {} end
-  local ok,data=pcall(function() return HttpService:JSONDecode(pinv.Value) end)
-  if not ok or type(data)~="table" then return {} end
-  local list={}
-  for k,v in pairs(data) do
-    if type(v)=="table" then
-      local amt=tonumber(v.Amount) or 0
-      if amt>0 then list[#list+1]={id=k,amt=amt} end
-    elseif type(v)=="number" and v>0 then
-      list[#list+1]={id=k,amt=v}
-    end
-  end
-  return list
-end
+-- verified: tuning kits = gacha pack id "Pack_Parts_Store".
+--   Remotes.OpenGacha:InvokeServer("Pack_Parts_Store",{Amount=n})  n<=10, returns (success,reward)
+--   raw invoke -> no reveal cutscene = fast. NOTE: real inventory lives in game VM (DataManager),
+--   unreadable from executor VM, so we open by packId and stop when server returns success=false.
+--   qty shown when the Tuning Kits menu is open (PartsInventory UI, cross-VM readable).
+local KIT_PACK="Pack_Parts_Store"
 local function openRemote()
   local r=game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
   return r and r:FindFirstChild("OpenGacha")
 end
+local function kitQty() -- remaining kits if the menu is open, else nil (unknown)
+  local pg=plr:FindFirstChild("PlayerGui"); if not pg then return nil end
+  local pi=pg:FindFirstChild("PartsInventory"); if not pi then return nil end
+  local fr=pi:FindFirstChild(KIT_PACK,true); if not fr then return nil end
+  local q=fr:FindFirstChild("Quantity",true)
+  local lbl=q and q:FindFirstChildWhichIsA("TextLabel")
+  return lbl and tonumber((tostring(lbl.Text):gsub("%D","")))
+end
 task.spawn(function()
+  local emptyStreak=0
   while getgenv().__delTok==myTok do
-    if not DEL.autoOpen then task.wait(0.4); continue end
+    if not DEL.autoOpen then emptyStreak=0; task.wait(0.4); continue end
     local rf=openRemote()
     if not rf then task.wait(0.5); continue end
-    local packs=ownedPacks()
-    if #packs==0 then setKit("KITS : none"); task.wait(0.6); continue end
-    for _,p in ipairs(packs) do
-      local left=p.amt
-      while left>0 and DEL.autoOpen and getgenv().__delTok==myTok do
-        local n=math.min(left,10)
-        setKit("OPEN x"..n.."..")
-        local pok,ok1=pcall(function() return rf:InvokeServer(p.id,{Amount=n}) end)
-        if not pok or ok1==false or ok1==nil then break end
-        left=left-n
-        task.wait(0.05)
-      end
+    local q=kitQty()
+    if q~=nil and q<=0 then setKit("KITS : 0"); emptyStreak=0; task.wait(0.8); continue end
+    local n=(q and math.max(1,math.min(q,10))) or 10
+    setKit("OPEN x"..n..(q and (" ("..q..")") or ""))
+    local pok,ok1=pcall(function() return rf:InvokeServer(KIT_PACK,{Amount=n}) end)
+    if not pok or ok1==false or ok1==nil then
+      -- server refused (out of kits). back off; if qty unknown, avoid endless spam
+      emptyStreak+=1
+      setKit("KITS : done")
+      task.wait(emptyStreak>3 and 2 or 0.6)
+    else
+      emptyStreak=0
+      task.wait(0.05)
     end
-    task.wait(0.1)
   end
 end)
 
