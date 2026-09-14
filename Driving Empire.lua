@@ -137,6 +137,7 @@ local function pickupCentroid()
 end
 
 local setStatus=function(_) end
+local setKit=function(_) end
 
 task.spawn(function()
   local lastKey,lastChange=nil,os.clock()
@@ -211,12 +212,12 @@ task.spawn(function()
     local rf=openRemote()
     if not rf then task.wait(0.5); continue end
     local packs=ownedPacks()
-    if #packs==0 then setStatus("KITS: none"); task.wait(0.6); continue end
+    if #packs==0 then setKit("KITS : none"); task.wait(0.6); continue end
     for _,p in ipairs(packs) do
       local left=p.amt
       while left>0 and DEL.autoOpen and getgenv().__delTok==myTok do
         local n=math.min(left,10)
-        setStatus("OPEN "..p.id.." x"..n)
+        setKit("OPEN x"..n.."..")
         local pok,ok1=pcall(function() return rf:InvokeServer(p.id,{Amount=n}) end)
         if not pok or ok1==false or ok1==nil then break end
         left=left-n
@@ -270,6 +271,8 @@ obtn.MouseButton1Click:Connect(function()
   obtn.Text="OPEN KITS : "..(DEL.autoOpen and "ON" or "OFF")
   obtn.BackgroundColor3=DEL.autoOpen and Color3.fromRGB(160,110,40) or Color3.fromRGB(45,48,60)
 end)
+-- kit worker writes short status onto this button while ON (own line, no clash with delivery status)
+setKit=function(s) if DEL.autoOpen then obtn.Text=s end end
 local lbl=Instance.new("TextLabel"); lbl.BackgroundTransparency=1; lbl.Size=UDim2.new(1,-20,0,22)
 lbl.Position=UDim2.fromOffset(10,160); lbl.Font=Enum.Font.Gotham; lbl.TextSize=13
 lbl.TextColor3=Color3.fromRGB(180,185,200); lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.Text="OFF"; lbl.Parent=f
