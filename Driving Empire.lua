@@ -1,4 +1,4 @@
--- DELIVERY LOOP  (Driving Empire)  +settable dropoff delay +anti-afk
+-- DELIVERY LOOP  (Driving Empire)  +settable dropoff delay +anti-afk(VIM)
 -- pickup: hold at package centroid until all collected; dropoff: wait N s then tp+slide
 local Players=game:GetService("Players")
 local UIS=game:GetService("UserInputService")
@@ -11,15 +11,29 @@ getgenv().__delTok=(getgenv().__delTok or 0)+1
 local myTok=getgenv().__delTok
 pcall(function() local g=game:GetService("CoreGui"):FindFirstChild("DelGui"); if g then g:Destroy() end end)
 
--- anti afk (connect once across re-inject)
+-- anti afk (periodic REAL input via VirtualInputManager; connect once across re-inject)
 if not getgenv().__delAfk then
   getgenv().__delAfk=true
-  local ok,VU=pcall(game.GetService,game,"VirtualUser")
-  if ok and VU then
-    plr.Idled:Connect(function()
+  task.spawn(function()
+    local VIM=game:GetService("VirtualInputManager")
+    local VU=game:GetService("VirtualUser")
+    while getgenv().__delAfk do
+      -- F13 = unbound key, resets Roblox idle timer, no gameplay effect
+      pcall(function()
+        VIM:SendKeyEvent(true, Enum.KeyCode.F13, false, game)
+        task.wait(0.1)
+        VIM:SendKeyEvent(false, Enum.KeyCode.F13, false, game)
+      end)
       pcall(function() VU:CaptureController(); VU:ClickButton2(Vector2.new()) end)
+      task.wait(60)
+    end
+  end)
+  plr.Idled:Connect(function()
+    pcall(function()
+      local VU=game:GetService("VirtualUser")
+      VU:CaptureController(); VU:ClickButton2(Vector2.new())
     end)
-  end
+  end)
 end
 
 local TRIGGER=25
@@ -206,4 +220,4 @@ head.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.Mouse
 UIS.InputChanged:Connect(function(i) if drag and i.UserInputType==Enum.UserInputType.MouseMovement then
   local d=i.Position-ds; f.Position=UDim2.new(sp.X.Scale,sp.X.Offset+d.X,sp.Y.Scale,sp.Y.Offset+d.Y) end end)
 UIS.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end end)
-print("[DELIVERY LOOP] loaded  +dropDelay +anti-afk")
+print("[DELIVERY LOOP] loaded  +dropDelay +anti-afk(VIM)")
