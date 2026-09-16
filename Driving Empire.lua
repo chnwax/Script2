@@ -13,8 +13,8 @@ if DEL.autoOpen==nil then DEL.autoOpen=false end
 if DEL.autoBuy==nil then DEL.autoBuy=false end
 if DEL.autoGear==nil then DEL.autoGear=false end
 if DEL.gearMode==nil then DEL.gearMode="first" end   -- "first"=first red line, "last"=last red line
-if DEL.gearFirst==nil then DEL.gearFirst=0.80 end     -- RPM frac at first red line (gauge sweep)
-if DEL.gearLast==nil then DEL.gearLast=0.88 end       -- RPM frac at last red line (before limiter pin ~0.93+)
+if DEL.gearFirst==nil then DEL.gearFirst=0.85 end     -- RPM frac at first red line
+if DEL.gearLast==nil then DEL.gearLast=0.94 end       -- RPM frac at last red line (limiter pins ~0.96 uniform all gears)
 getgenv().__delTok=(getgenv().__delTok or 0)+1
 local myTok=getgenv().__delTok
 pcall(function() local g=game:GetService("CoreGui"):FindFirstChild("DelGui"); if g then g:Destroy() end end)
@@ -267,9 +267,10 @@ end)
 
 -- ===== AUTO GEAR (auto-upshift at redline) =====
 -- no RPM attribute; tach fill fraction = ChassisHUD.Speedometer.RPM.UIGradient.Offset.X
---   measured gear-1 sweep: idle 0.11 -> 0.80(first red) -> 0.88(last red) -> pins 0.93-0.96(limiter).
+--   measured: idle 0.11 -> 0.80(first red) -> limiter pins 0.96 UNIFORM on every gear.
 --   upshift key = E via VirtualInputManager; Gear is a live model attr.
---   FIRST = shift at first red line (>=0.80); LAST = shift at last red line (>=0.88, before limiter pin).
+--   FIRST=first red line (~0.85); LAST=last red line (~0.94, just under 0.96 pin).
+--   fire E at threshold, re-arm on gear CHANGE (one shift per redline hit), retry if E dropped.
 local function myCar()
   local ch=plr.Character; if not ch then return nil end
   local hum=ch:FindFirstChildOfClass("Humanoid")
@@ -288,27 +289,30 @@ local function rpmFrac()
 end
 task.spawn(function()
   local VIM=game:GetService("VirtualInputManager")
-  local armed=true       -- one E-press per redline touch; re-arm after RPM drops (hysteresis)
+  local armed=true       -- one E-press per redline hit
   local lastShift=0
+  local lastGear=nil     -- re-arm on gear CHANGE (robust vs close ratios that don't drop RPM below a band)
   while getgenv().__delTok==myTok do
-    if not DEL.autoGear then armed=true; task.wait(0.2); continue end
+    if not DEL.autoGear then armed=true; lastGear=nil; task.wait(0.2); continue end
     if UIS:GetFocusedTextBox() then task.wait(0.15); continue end
     local car=myCar()
-    if not car then armed=true; task.wait(0.25); continue end
+    if not car then armed=true; lastGear=nil; task.wait(0.25); continue end
     local f=rpmFrac()
     local gear=tonumber(car:GetAttribute("Gear"))
     local thr=tonumber(car:GetAttribute("InputThrottle")) or 0
     local rev=car:GetAttribute("Reverse")==true
-    local thresh=(DEL.gearMode=="last") and (DEL.gearLast or 0.88) or (DEL.gearFirst or 0.80)
-    -- re-arm once RPM falls back below the shift point (after an upshift the tach drops);
-    -- keeps ONE shift per redline hit and avoids E-spam while pinned on the limiter.
-    if f and f<thresh-0.06 then armed=true end
-    if f and gear and gear>=1 and thr>0 and not rev and armed and f>=thresh and os.clock()-lastShift>0.15 then
+    local thresh=(DEL.gearMode=="last") and (DEL.gearLast or 0.94) or (DEL.gearFirst or 0.85)
+    -- gear changed since last loop -> previous shift landed -> arm for the next one.
+    if gear and lastGear and gear~=lastGear then armed=true end
+    lastGear=gear
+    -- fallback: still pinned above the line and disarmed for >0.6s -> E was dropped (or top gear); retry.
+    if f and not armed and f>=thresh and os.clock()-lastShift>0.6 then armed=true end
+    if f and gear and gear>=1 and thr>0 and not rev and armed and f>=thresh and os.clock()-lastShift>0.2 then
       VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
       task.wait(0.03)
       VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
       lastShift=os.clock()
-      armed=false        -- stays disarmed until RPM drops (next gear) or limiter releases
+      armed=false
     end
     task.wait(0.03)
   end
