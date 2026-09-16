@@ -1,4 +1,4 @@
--- DELIVERY LOOP  (Driving Empire)  +settable dropoff delay +anti-afk(VIM) +auto-open tuning kits
+-- DELIVERY LOOP  (Driving Empire)  +dropoff delay +anti-afk(VIM) +auto-open/buy kits +auto-gear
 -- pickup: hold at package centroid until all collected; dropoff: wait N s then tp+slide
 -- anti-afk: game teleports to AFK room when (now-lastInput) >= TeleportIdleTime; VIM key fires
 --           UserInputService.InputBegan which resets that timer. Pulse < threshold (12s).
@@ -10,6 +10,11 @@ getgenv().DEL=getgenv().DEL or {on=false}
 local DEL=getgenv().DEL
 if DEL.dropDelay==nil then DEL.dropDelay=3 end
 if DEL.autoOpen==nil then DEL.autoOpen=false end
+if DEL.autoBuy==nil then DEL.autoBuy=false end
+if DEL.autoGear==nil then DEL.autoGear=false end
+if DEL.gearMode==nil then DEL.gearMode="first" end   -- "first"=first red line, "last"=last red line
+if DEL.gearFirst==nil then DEL.gearFirst=0.80 end     -- RPM frac at first red line (gauge sweep)
+if DEL.gearLast==nil then DEL.gearLast=0.88 end       -- RPM frac at last red line (before limiter pin ~0.93+)
 getgenv().__delTok=(getgenv().__delTok or 0)+1
 local myTok=getgenv().__delTok
 pcall(function() local g=game:GetService("CoreGui"):FindFirstChild("DelGui"); if g then g:Destroy() end end)
@@ -138,6 +143,7 @@ end
 
 local setStatus=function(_) end
 local setKit=function(_) end
+local setBuy=function(_) end
 
 task.spawn(function()
   local lastKey,lastChange=nil,os.clock()
@@ -221,10 +227,97 @@ task.spawn(function()
   end
 end)
 
+-- ===== AUTO-BUY TUNING KITS =====
+-- verified: Remotes.PurchaseGacha:FireServer("Pack_Parts_Store","Cash") buys 1 kit for $20,000.
+--   cash deduct is server-delayed; server rejects when broke (owned stalls, no charge) -> safe to loop.
+--   Remotes.CheckOwnedPacks:InvokeServer() -> total owned packs (used to verify + detect stall).
+local KIT_PRICE=20000
+local function buyRemote()
+  local r=game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+  return r and r:FindFirstChild("PurchaseGacha")
+end
+local function ownedPacks()
+  local r=game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+  local c=r and r:FindFirstChild("CheckOwnedPacks")
+  if not c then return -1 end
+  local ok,v=pcall(function() return c:InvokeServer() end)
+  return ok and tonumber(v) or -1
+end
+local function cashNow()
+  local ls=plr:FindFirstChild("leaderstats"); local c=ls and ls:FindFirstChild("Cash")
+  return c and tonumber(c.Value) or 0
+end
+task.spawn(function()
+  local lastOwned=-1
+  local stall=0
+  while getgenv().__delTok==myTok do
+    if not DEL.autoBuy then lastOwned=-1; stall=0; task.wait(0.4); continue end
+    local rf=buyRemote()
+    if not rf then task.wait(0.6); continue end
+    if cashNow()<KIT_PRICE then setBuy("BUY : low $ ("..cashNow()..")"); task.wait(1); continue end
+    rf:FireServer(KIT_PACK,"Cash")
+    task.wait(0.35)
+    local ow=ownedPacks()
+    if lastOwned>=0 and ow>=0 and ow<=lastOwned then stall+=1 else stall=0 end
+    lastOwned=ow
+    setBuy("BUY : "..(ow>=0 and (ow.." owned") or "buying"))
+    if stall>=4 then setBuy("BUY : stalled"); task.wait(1.5); stall=0 end
+  end
+end)
+
+-- ===== AUTO GEAR (auto-upshift at redline) =====
+-- no RPM attribute; tach fill fraction = ChassisHUD.Speedometer.RPM.UIGradient.Offset.X
+--   measured gear-1 sweep: idle 0.11 -> 0.80(first red) -> 0.88(last red) -> pins 0.93-0.96(limiter).
+--   upshift key = E via VirtualInputManager; Gear is a live model attr.
+--   FIRST = shift at first red line (>=0.80); LAST = shift at last red line (>=0.88, before limiter pin).
+local function myCar()
+  local ch=plr.Character; if not ch then return nil end
+  local hum=ch:FindFirstChildOfClass("Humanoid")
+  local seat=hum and hum.SeatPart; if not seat then return nil end
+  local m=seat:FindFirstAncestorWhichIsA("Model")
+  while m and m:GetAttribute("Gear")==nil and m.Parent and m.Parent~=workspace do m=m.Parent end
+  if m and m:GetAttribute("Gear")~=nil then return m end
+  return nil
+end
+local function rpmFrac()
+  local pg=plr:FindFirstChild("PlayerGui"); if not pg then return nil end
+  local hud=pg:FindFirstChild("ChassisHUD"); if not hud then return nil end
+  local spd=hud:FindFirstChild("Speedometer"); if not spd then return nil end
+  local rpm=spd:FindFirstChild("RPM"); local g=rpm and rpm:FindFirstChild("UIGradient")
+  return g and g.Offset.X or nil
+end
+task.spawn(function()
+  local VIM=game:GetService("VirtualInputManager")
+  local armed=true       -- one E-press per redline touch; re-arm after RPM drops (hysteresis)
+  local lastShift=0
+  while getgenv().__delTok==myTok do
+    if not DEL.autoGear then armed=true; task.wait(0.2); continue end
+    if UIS:GetFocusedTextBox() then task.wait(0.15); continue end
+    local car=myCar()
+    if not car then armed=true; task.wait(0.25); continue end
+    local f=rpmFrac()
+    local gear=tonumber(car:GetAttribute("Gear"))
+    local thr=tonumber(car:GetAttribute("InputThrottle")) or 0
+    local rev=car:GetAttribute("Reverse")==true
+    local thresh=(DEL.gearMode=="last") and (DEL.gearLast or 0.88) or (DEL.gearFirst or 0.80)
+    -- re-arm once RPM falls back below the shift point (after an upshift the tach drops);
+    -- keeps ONE shift per redline hit and avoids E-spam while pinned on the limiter.
+    if f and f<thresh-0.06 then armed=true end
+    if f and gear and gear>=1 and thr>0 and not rev and armed and f>=thresh and os.clock()-lastShift>0.15 then
+      VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+      task.wait(0.03)
+      VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+      lastShift=os.clock()
+      armed=false        -- stays disarmed until RPM drops (next gear) or limiter releases
+    end
+    task.wait(0.03)
+  end
+end)
+
 -- ===== UI =====
 local CoreGui=game:GetService("CoreGui")
 local gui=Instance.new("ScreenGui"); gui.Name="DelGui"; gui.ResetOnSpawn=false; gui.Parent=CoreGui
-local f=Instance.new("Frame"); f.Size=UDim2.fromOffset(210,205); f.Position=UDim2.fromOffset(40,140)
+local f=Instance.new("Frame"); f.Size=UDim2.fromOffset(210,296); f.Position=UDim2.fromOffset(40,140)
 f.BackgroundColor3=Color3.fromRGB(22,24,30); f.BorderSizePixel=0; f.Parent=gui
 Instance.new("UICorner",f).CornerRadius=UDim.new(0,10)
 local st=Instance.new("UIStroke",f); st.Color=Color3.fromRGB(70,120,255); st.Thickness=1.5
@@ -266,8 +359,41 @@ obtn.MouseButton1Click:Connect(function()
 end)
 -- kit worker writes short status onto this button while ON (own line, no clash with delivery status)
 setKit=function(s) if DEL.autoOpen then obtn.Text=s end end
+-- auto-buy tuning kits toggle (spends Cash: $20,000/kit)
+local bbtn=Instance.new("TextButton"); bbtn.Size=UDim2.new(1,-20,0,32); bbtn.Position=UDim2.fromOffset(10,154)
+bbtn.BackgroundColor3=DEL.autoBuy and Color3.fromRGB(160,110,40) or Color3.fromRGB(45,48,60)
+bbtn.Text="BUY KITS : "..(DEL.autoBuy and "ON" or "OFF"); bbtn.Font=Enum.Font.GothamBold
+bbtn.TextSize=15; bbtn.TextColor3=Color3.new(1,1,1); bbtn.BorderSizePixel=0; bbtn.Parent=f
+Instance.new("UICorner",bbtn).CornerRadius=UDim.new(0,8)
+bbtn.MouseButton1Click:Connect(function()
+  DEL.autoBuy=not DEL.autoBuy
+  bbtn.Text="BUY KITS : "..(DEL.autoBuy and "ON" or "OFF")
+  bbtn.BackgroundColor3=DEL.autoBuy and Color3.fromRGB(160,110,40) or Color3.fromRGB(45,48,60)
+end)
+setBuy=function(s) if DEL.autoBuy then bbtn.Text=s end end
+-- auto gear toggle
+local gbtn=Instance.new("TextButton"); gbtn.Size=UDim2.new(1,-20,0,32); gbtn.Position=UDim2.fromOffset(10,190)
+gbtn.BackgroundColor3=DEL.autoGear and Color3.fromRGB(40,160,90) or Color3.fromRGB(45,48,60)
+gbtn.Text="AUTO GEAR : "..(DEL.autoGear and "ON" or "OFF"); gbtn.Font=Enum.Font.GothamBold
+gbtn.TextSize=15; gbtn.TextColor3=Color3.new(1,1,1); gbtn.BorderSizePixel=0; gbtn.Parent=f
+Instance.new("UICorner",gbtn).CornerRadius=UDim.new(0,8)
+gbtn.MouseButton1Click:Connect(function()
+  DEL.autoGear=not DEL.autoGear
+  gbtn.Text="AUTO GEAR : "..(DEL.autoGear and "ON" or "OFF")
+  gbtn.BackgroundColor3=DEL.autoGear and Color3.fromRGB(40,160,90) or Color3.fromRGB(45,48,60)
+end)
+-- redline shift-point: FIRST (enter red band) vs LAST (limiter / last red line)
+local rbtn=Instance.new("TextButton"); rbtn.Size=UDim2.new(1,-20,0,28); rbtn.Position=UDim2.fromOffset(10,226)
+rbtn.BackgroundColor3=Color3.fromRGB(38,41,52)
+rbtn.Text="REDLINE : "..string.upper(DEL.gearMode); rbtn.Font=Enum.Font.GothamBold
+rbtn.TextSize=13; rbtn.TextColor3=Color3.fromRGB(200,205,215); rbtn.BorderSizePixel=0; rbtn.Parent=f
+Instance.new("UICorner",rbtn).CornerRadius=UDim.new(0,8)
+rbtn.MouseButton1Click:Connect(function()
+  DEL.gearMode=(DEL.gearMode=="first") and "last" or "first"
+  rbtn.Text="REDLINE : "..string.upper(DEL.gearMode)
+end)
 local lbl=Instance.new("TextLabel"); lbl.BackgroundTransparency=1; lbl.Size=UDim2.new(1,-20,0,22)
-lbl.Position=UDim2.fromOffset(10,160); lbl.Font=Enum.Font.Gotham; lbl.TextSize=13
+lbl.Position=UDim2.fromOffset(10,262); lbl.Font=Enum.Font.Gotham; lbl.TextSize=13
 lbl.TextColor3=Color3.fromRGB(180,185,200); lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.Text="OFF"; lbl.Parent=f
 setStatus=function(s) lbl.Text=s end
 btn.MouseButton1Click:Connect(function()
@@ -280,4 +406,4 @@ head.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.Mouse
 UIS.InputChanged:Connect(function(i) if drag and i.UserInputType==Enum.UserInputType.MouseMovement then
   local d=i.Position-ds; f.Position=UDim2.new(sp.X.Scale,sp.X.Offset+d.X,sp.Y.Scale,sp.Y.Offset+d.Y) end end)
 UIS.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end end)
-print("[DELIVERY LOOP] loaded  +dropDelay +anti-afk(VIM 12s) +auto-open kits")
+print("[DELIVERY LOOP] loaded  +dropDelay +anti-afk(VIM 12s) +auto-open/buy kits +auto-gear")
